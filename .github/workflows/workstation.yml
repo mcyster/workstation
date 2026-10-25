@@ -63,9 +63,7 @@ jobs:
             echo "- Project: $PROJECT"
             echo "- Zone: $ZONE"
             sed -n 's/^web terminal: /- Browser: /p' output.txt
-            if grep -q '^secret:' output.txt; then
-              echo "- Password: https://console.cloud.google.com/security/secret-manager/secret/workstation-web-terminal-password?project=$PROJECT"
-            fi
+            sed -n 's/^password: /- Password: /p' output.txt
             echo '### Machines'
             echo '| Name | Status | Machine type | Zone | IP | Browser | Password |'
             echo '| --- | --- | --- | --- | --- | --- | --- |'

@@ -46,7 +46,7 @@ bash infra/workstation/github-gcloud-identity \
   --repo OWNER/workstation
 ```
 
-The script enables the required APIs and creates the Google Cloud service account, permissions, identity provider, and Secret Manager secret. It prints values for `WORKSTATION_GCLOUD_SERVICE_ACCOUNT` and `WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER`.
+The script enables the required APIs and creates the Google Cloud service account, permissions, identity provider, and a limited role for writing workstation password secrets. It prints values for `WORKSTATION_GCLOUD_SERVICE_ACCOUNT` and `WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER`.
 
 In GitHub, open **Repository → Settings → Secrets and variables → Actions**. Add these repository settings:
 
@@ -99,11 +99,13 @@ Override `--project` and `--zone` per command, or use `gcloud` configuration. `c
 
 `list` includes the browser URL and Secret Manager password link for each workstation with browser access enabled. The GitHub Actions summary renders the same links.
 
+After upgrading an existing installation to per-workstation secrets, rerun `github-gcloud-identity`, then run `web-terminal` once for each existing workstation. This creates its named secret and makes the password link available in `list`.
+
 SSH keys are managed by gcloud. Once `config-ssh` has run, standard `ssh`, `scp`, and `rsync` can be used.
 
 ## Browser access
 
-`create --web-terminal` provisions code-server (browser-based editor and shell) with a random password. Browse to `https://EXTERNAL_IP:8443` and accept the self-signed certificate warning. The workstation holds only an Argon2 password hash. The plaintext password is added to the Google Cloud Secret Manager secret `workstation-web-terminal-password`, which the workflow identity can append to, but cannot read. Use Secret Manager in the Google Cloud console to see the active password.
+`create --web-terminal` provisions code-server (browser-based editor and shell) with a random password. Browse to `https://EXTERNAL_IP:8443` and accept the self-signed certificate warning. The workstation holds only an Argon2 password hash. The plaintext password is added to the Google Cloud Secret Manager secret `workstation-NAME-web-terminal-password`. The workflow identity can create these secrets and append versions, but cannot read their values. Use Secret Manager in the Google Cloud console to see the active password.
 
 Run `web-terminal` to set up browser access or issue a new password. `start` rotates the password after a stopped VM resumes. `create` without the flag leaves port 8443 closed. Browser access is public on port 8443 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
 
