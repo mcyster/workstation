@@ -108,7 +108,7 @@ Run `web-terminal` to set up browser access or issue a new password. `start` rot
 ## Provisioning and ownership
 
 - `scripts/workstation`: instance lifecycle, firewall, SSH, and password rotation.
-- `infra/workstation/setup`: idempotent first-boot host provisioning, embedded in cloud-init metadata.
+- `infra/workstation/setup`: idempotent first-boot host provisioning, attached as a GCE startup script.
 - `infra/workstation/web-terminal`: code-server service and password hash updates.
 - `infra/workstation/github-gcloud-identity`: workload identity, service account, and Secret Manager setup.
 - `.github/workflows/workstation.yml`: manual action, using Workload Identity Federation.

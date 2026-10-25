@@ -6,6 +6,8 @@ NAME=main
 PROJECT=""
 ZONE=""
 MACHINE_TYPE=e2-standard-2
+IMAGE_PROJECT=ubuntu-os-cloud
+IMAGE_FAMILY=ubuntu-2404-lts-amd64
 WEB=false
 YES=false
 ACTION=""
@@ -34,7 +36,9 @@ while (($#)); do
  esac
 done
 [[ -n "$ACTION" ]] || { usage; exit 2; }
-[[ "$NAME" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] && ((${#NAME}<=47)) || die 'Invalid workstation name'
+if [[ ! "$NAME" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || ((${#NAME} > 47)); then
+  die 'Invalid workstation name'
+fi
 command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
@@ -50,41 +54,52 @@ fi
 field() { gcloud compute instances describe "$INSTANCE" "${GC[@]}" --format="value($1)" 2>/dev/null || true; }
 status() { field status; }
 wait_ssh() {
- for i in {1..40}; do
-   if gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command true >/dev/null 2>&1; then return 0; fi
-   sleep 5
- done
- die 'SSH did not become available'
+  for _ in {1..40}; do
+    if gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command true >/dev/null 2>&1; then return 0; fi
+    sleep 5
+  done
+  die 'SSH did not become available'
+}
+ensure_setup() {
+  wait_ssh
+  if ! gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1; then
+    echo 'Completing workstation setup...'
+    gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/setup"
+  fi
+  gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
 }
 rotate() {
- [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
- wait_ssh
- if [[ "$(field 'tags.items')" != *"$TAG"* ]]; then
-   gcloud compute instances add-tags "$INSTANCE" "${GC[@]}" --tags "$TAG" >/dev/null
- fi
- if ! gcloud compute firewall-rules describe "$TAG" --project "$PROJECT" >/dev/null 2>&1; then
-   gcloud compute firewall-rules create "$TAG" --project "$PROJECT" --allow tcp:8443 --target-tags "$TAG" >/dev/null
- fi
- local password
- password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
- gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command "CODE_SERVER_PASSWORD='$password' bash -s" < "$ROOT/infra/workstation/web-terminal" >/dev/null
- if ! printf %s "$password" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
-   die 'Password changed on VM but not saved in Secret Manager. Run web-terminal again.'
- fi
- echo "web terminal: https://$(field 'networkInterfaces[0].accessConfigs[0].natIP'):8443"
- echo "secret: $SECRET"
- echo "password: https://console.cloud.google.com/security/secret-manager/secret/$SECRET?project=$PROJECT"
+  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+  ensure_setup
+  if [[ "$(field 'tags.items')" != *"$TAG"* ]]; then
+    gcloud compute instances add-tags "$INSTANCE" "${GC[@]}" --tags "$TAG" >/dev/null
+  fi
+  if ! gcloud compute firewall-rules describe "$TAG" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud compute firewall-rules create "$TAG" --project "$PROJECT" --allow tcp:8443 --target-tags "$TAG" >/dev/null
+  fi
+  local password
+  password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
+  gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command "CODE_SERVER_PASSWORD='$password' bash -s" < "$ROOT/infra/workstation/web-terminal" >/dev/null
+  if ! printf %s "$password" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
+    die 'Password changed on VM but not saved in Secret Manager. Run web-terminal again.'
+  fi
+  echo "web terminal: https://$(field 'networkInterfaces[0].accessConfigs[0].natIP'):8443"
+  echo "secret: $SECRET"
+  echo "password: https://console.cloud.google.com/security/secret-manager/secret/$SECRET?project=$PROJECT"
 }
 case "$ACTION" in
  create)
-   if [[ -z "$(status)" ]]; then
-     gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
-     TMP="$(mktemp)"; trap 'rm -f "$TMP"' EXIT
-     # Embed setup directly into cloud-init; do not fetch a mutable setup script at boot.
-     { printf '#cloud-config\nwrite_files:\n  - path: /usr/local/sbin/workstation-setup\n    permissions: "0755"\n    encoding: b64\n    content: %s\nruncmd:\n  - [ /usr/local/sbin/workstation-setup ]\n' "$(base64 -w0 < "$ROOT/infra/workstation/setup")"; } > "$TMP"
-     gcloud compute instances create "$INSTANCE" "${GC[@]}" --machine-type "$MACHINE_TYPE" --labels managed-workstation=true --metadata-from-file="user-data=$TMP"
-   else echo "$INSTANCE already exists"; fi
-   if [[ "$WEB" == true ]]; then rotate; fi
+    if [[ -z "$(status)" ]]; then
+      gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
+      # GCE executes startup-script metadata directly; no cloud-init dependency is required.
+      gcloud compute instances create "$INSTANCE" "${GC[@]}" \
+        --machine-type "$MACHINE_TYPE" \
+        --image-project "$IMAGE_PROJECT" \
+        --image-family "$IMAGE_FAMILY" \
+        --labels managed-workstation=true \
+        --metadata-from-file="startup-script=$ROOT/infra/workstation/setup"
+    else echo "$INSTANCE already exists"; fi
+    if [[ "$WEB" == true ]]; then rotate; else ensure_setup; fi
    ;;
  start)
    [[ -n "$(status)" ]] || die 'Workstation does not exist'
