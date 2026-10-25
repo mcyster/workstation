@@ -97,7 +97,10 @@ case "$ACTION" in
  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GC[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
  web-terminal) rotate;;
- list) gcloud compute instances list --project "$PROJECT" --filter='labels.managed-workstation=true' --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP)';;
+ list)
+   gcloud compute instances list --project "$PROJECT" --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP,labels.managed-workstation)' |
+     sed -n 's/,true$//p'
+   ;;
  destroy)
    [[ -n "$(status)" ]] || { echo 'Workstation does not exist'; exit 0; }
    [[ "$(field 'labels.managed-workstation')" == true ]] || die 'Not a managed workstation; refusing to delete'
