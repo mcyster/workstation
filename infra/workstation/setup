@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Idempotent first-boot setup. No project checkout is assumed.
+set -euo pipefail
+USER_NAME=developer
+HOME_DIR=/home/developer
+MARKER=/var/lib/workstation-setup.done
+[[ ! -f "$MARKER" ]] || exit 0
+export DEBIAN_FRONTEND=noninteractive
+apt-get update >/dev/null
+apt-get install -y --no-install-recommends sudo curl git ca-certificates direnv >/dev/null
+id "$USER_NAME" >/dev/null 2>&1 || useradd -m -s /bin/bash "$USER_NAME"
+usermod -aG sudo "$USER_NAME"
+if [[ ! -d /nix/store ]]; then
+  curl -fsSL https://install.determinate.systems/nix | sh -s -- install linux --no-confirm
+fi
+if getent group nix-users >/dev/null; then usermod -aG nix-users "$USER_NAME"; fi
+if getent group nix >/dev/null; then usermod -aG nix "$USER_NAME"; fi
+if [[ ! -d "$HOME_DIR/.nix-direnv" ]]; then
+  sudo -u "$USER_NAME" git clone --depth 1 https://github.com/nix-community/nix-direnv "$HOME_DIR/.nix-direnv"
+fi
+mkdir -p "$HOME_DIR/.config/direnv"
+printf '%s\n' 'source $HOME/.nix-direnv/direnvrc' > "$HOME_DIR/.config/direnv/direnvrc"
+if ! grep -q 'direnv hook bash' "$HOME_DIR/.bashrc"; then
+  cat >> "$HOME_DIR/.bashrc" <<'BASHRC'
+
+if [ -e /etc/profile.d/nix.sh ]; then . /etc/profile.d/nix.sh; fi
+eval "$(direnv hook bash)"
+BASHRC
+fi
+chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"
+touch "$MARKER"

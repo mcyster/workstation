@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Workstation command-line interface for Google Compute Engine.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NAME=main
+PROJECT=""
+ZONE=""
+MACHINE_TYPE=e2-standard-2
+WEB=false
+YES=false
+ACTION=""
+usage() { cat <<'HELP'
+Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
+       workstation create [NAME] [--machine-type TYPE] [--web-terminal]
+Commands: create, start, stop, list, shell, config-ssh, web-terminal, destroy
+web-terminal sets up browser access and issues a new password.
+Default name: main. Default machine type: e2-standard-2.
+Stop retains disk; destroy permanently deletes disk.
+HELP
+}
+die() { echo "workstation: $*" >&2; exit 1; }
+while (($#)); do
+ case "$1" in
+   -h|--help) usage; exit 0;;
+   --project|--zone|--machine-type) (($#>=2)) || die "Missing value for $1"; case "$1" in --project) PROJECT="$2";; --zone) ZONE="$2";; --machine-type) MACHINE_TYPE="$2";; esac; shift 2;;
+   --project=*) PROJECT="${1#*=}"; shift;;
+   --zone=*) ZONE="${1#*=}"; shift;;
+   --machine-type=*) MACHINE_TYPE="${1#*=}"; shift;;
+   --web-terminal) WEB=true; shift;;
+   --yes) YES=true; shift;;
+   create|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   -*) die "Unknown option $1";;
+   *) NAME="$1"; shift;;
+ esac
+done
+[[ -n "$ACTION" ]] || { usage; exit 2; }
+[[ "$NAME" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] && ((${#NAME}<=47)) || die 'Invalid workstation name'
+command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
+PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
+ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
+[[ "$PROJECT" != '(unset)' && -n "$PROJECT" ]] || die 'Specify --project'
+INSTANCE="workstation-$NAME"
+SECRET=workstation-web-terminal-password
+TAG=workstation-code-server
+GC=(--project "$PROJECT")
+if [[ "$ACTION" != list && "$ACTION" != config-ssh ]]; then
+ [[ "$ZONE" != '(unset)' && -n "$ZONE" ]] || die 'Specify --zone'
+ GC+=(--zone "$ZONE")
+fi
+field() { gcloud compute instances describe "$INSTANCE" "${GC[@]}" --format="value($1)" 2>/dev/null || true; }
+status() { field status; }
+wait_ssh() {
+ for i in {1..40}; do
+   if gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command true >/dev/null 2>&1; then return 0; fi
+   sleep 5
+ done
+ die 'SSH did not become available'
+}
+rotate() {
+ [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+ wait_ssh
+ if [[ "$(field 'tags.items')" != *"$TAG"* ]]; then
+   gcloud compute instances add-tags "$INSTANCE" "${GC[@]}" --tags "$TAG" >/dev/null
+ fi
+ if ! gcloud compute firewall-rules describe "$TAG" --project "$PROJECT" >/dev/null 2>&1; then
+   gcloud compute firewall-rules create "$TAG" --project "$PROJECT" --allow tcp:8443 --target-tags "$TAG" >/dev/null
+ fi
+ local password
+ password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
+ gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command "CODE_SERVER_PASSWORD='$password' bash -s" < "$ROOT/infra/workstation/web-terminal" >/dev/null
+ if ! printf %s "$password" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
+   die 'Password changed on VM but not saved in Secret Manager. Run web-terminal again.'
+ fi
+ echo "web terminal: https://$(field 'networkInterfaces[0].accessConfigs[0].natIP'):8443"
+ echo "secret: $SECRET"
+ echo "password: https://console.cloud.google.com/security/secret-manager/secret/$SECRET?project=$PROJECT"
+}
+case "$ACTION" in
+ create)
+   if [[ -z "$(status)" ]]; then
+     gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
+     TMP="$(mktemp)"; trap 'rm -f "$TMP"' EXIT
+     # Embed setup directly into cloud-init; do not fetch a mutable setup script at boot.
+     { printf '#cloud-config\nwrite_files:\n  - path: /usr/local/sbin/workstation-setup\n    permissions: "0755"\n    encoding: b64\n    content: %s\nruncmd:\n  - [ /usr/local/sbin/workstation-setup ]\n' "$(base64 -w0 < "$ROOT/infra/workstation/setup")"; } > "$TMP"
+     gcloud compute instances create "$INSTANCE" "${GC[@]}" --machine-type "$MACHINE_TYPE" --labels managed-workstation=true --metadata-from-file="user-data=$TMP"
+   else echo "$INSTANCE already exists"; fi
+   if [[ "$WEB" == true ]]; then rotate; fi
+   ;;
+ start)
+   [[ -n "$(status)" ]] || die 'Workstation does not exist'
+   if [[ "$(status)" != RUNNING ]]; then
+     gcloud compute instances start "$INSTANCE" "${GC[@]}"
+     if [[ "$(field 'tags.items')" == *"$TAG"* ]]; then rotate; fi
+   fi
+   ;;
+ stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GC[@]}";;
+ shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GC[@]}";;
+ config-ssh) gcloud compute config-ssh --project "$PROJECT";;
+ web-terminal) rotate;;
+ list)
+   gcloud compute instances list --project "$PROJECT" --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP,labels.managed-workstation)' |
+     sed -n 's/,true$//p'
+   ;;
+ destroy)
+   [[ -n "$(status)" ]] || { echo 'Workstation does not exist'; exit 0; }
+   [[ "$(field 'labels.managed-workstation')" == true ]] || die 'Not a managed workstation; refusing to delete'
+   if [[ "$YES" != true ]]; then read -r -p "Type $NAME to permanently delete VM and boot disk: " CONFIRM; [[ "$CONFIRM" == "$NAME" ]] || die 'Cancelled'; fi
+   gcloud compute instances delete "$INSTANCE" "${GC[@]}" --delete-disks boot --quiet
+   ;;
+esac
