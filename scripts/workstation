@@ -44,7 +44,7 @@ PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
 [[ "$PROJECT" != '(unset)' && -n "$PROJECT" ]] || die 'Specify --project'
 INSTANCE="workstation-$NAME"
-SECRET=workstation-web-terminal-password
+SECRET="$INSTANCE-web-terminal-password"
 TAG=workstation-code-server
 GC=(--project "$PROJECT")
 if [[ "$ACTION" != list && "$ACTION" != config-ssh ]]; then
@@ -80,6 +80,10 @@ rotate() {
   local password
   password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
   gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command "CODE_SERVER_PASSWORD='$password' bash -s" < "$ROOT/infra/workstation/web-terminal" >/dev/null
+  if ! gcloud secrets describe "$SECRET" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets create "$SECRET" --project "$PROJECT" --replication-policy automatic \
+      --labels managed-workstation=true,workstation="$NAME" >/dev/null
+  fi
   if ! printf %s "$password" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
     die 'Password changed on VM but not saved in Secret Manager. Run web-terminal again.'
   fi
@@ -119,7 +123,7 @@ case "$ACTION" in
         printf '%s,%s,%s,%s,%s' "$instance" "$state" "$machine" "$zone" "$ip"
         if [[ "$tags" == *"$TAG"* && -n "$ip" ]]; then
           printf ',https://%s:8443,https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
-            "$ip" "$SECRET" "$PROJECT"
+            "$ip" "$instance-web-terminal-password" "$PROJECT"
         fi
         printf '\n'
       done

@@ -9,7 +9,7 @@ readonly MAX_PROPAGATION_ATTEMPTS=60
 readonly PROPAGATION_DELAY_SECONDS=2
 readonly WORKLOAD_IDENTITY_POOL="workstation-actions"
 readonly WORKLOAD_IDENTITY_PROVIDER="github"
-readonly PASSWORD_SECRET="workstation-web-terminal-password"
+readonly SECRET_WRITER_ROLE_ID="workstationSecretWriter"
 
 PROJECT=""
 REPOSITORY="$DEFAULT_REPOSITORY"
@@ -17,6 +17,7 @@ PROJECT_NUMBER=""
 GITHUB_SERVICE_ACCOUNT=""
 COMPUTE_SERVICE_ACCOUNT=""
 WORKLOAD_IDENTITY_PREFIX=""
+SECRET_WRITER_ROLE=""
 
 usage() {
   cat <<EOF
@@ -83,6 +84,7 @@ load_project_context() {
   GITHUB_SERVICE_ACCOUNT="github-actions@$PROJECT.iam.gserviceaccount.com"
   COMPUTE_SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
   WORKLOAD_IDENTITY_PREFIX="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL"
+  SECRET_WRITER_ROLE="projects/$PROJECT/roles/$SECRET_WRITER_ROLE_ID"
 }
 
 enable_required_apis() {
@@ -191,18 +193,27 @@ configure_workload_identity() {
       --member "principalSet://iam.googleapis.com/$WORKLOAD_IDENTITY_PREFIX/attribute.repository/$REPOSITORY"
 }
 
-configure_password_secret() {
-  if ! gcloud secrets describe "$PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud secrets create "$PASSWORD_SECRET" \
+configure_password_secret_access() {
+  if gcloud iam roles describe "$SECRET_WRITER_ROLE_ID" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud iam roles update "$SECRET_WRITER_ROLE_ID" \
       --project "$PROJECT" \
-      --replication-policy automatic >/dev/null
+      --title "Workstation Secret Writer" \
+      --description "Create workstation password secrets and append versions" \
+      --permissions "secretmanager.secrets.create,secretmanager.secrets.get,secretmanager.versions.add" \
+      --stage GA >/dev/null
+  else
+    gcloud iam roles create "$SECRET_WRITER_ROLE_ID" \
+      --project "$PROJECT" \
+      --title "Workstation Secret Writer" \
+      --description "Create workstation password secrets and append versions" \
+      --permissions "secretmanager.secrets.create,secretmanager.secrets.get,secretmanager.versions.add" \
+      --stage GA >/dev/null
   fi
 
-  retry_iam_binding "granting access to append password versions" \
-    gcloud secrets add-iam-policy-binding "$PASSWORD_SECRET" \
-      --project "$PROJECT" \
+  retry_iam_binding "granting access to create password secrets and append versions" \
+    gcloud projects add-iam-policy-binding "$PROJECT" \
       --member "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
-      --role roles/secretmanager.secretVersionAdder
+      --role "$SECRET_WRITER_ROLE"
 }
 
 print_github_settings() {
@@ -224,7 +235,7 @@ main() {
   configure_github_service_account
   grant_compute_service_account_access
   configure_workload_identity
-  configure_password_secret
+  configure_password_secret_access
   print_github_settings
 }
 
