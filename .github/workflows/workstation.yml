@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Action
+        description: Action (web-terminal sets up access and issues a new password)
         type: choice
         required: true
         options: [create, start, stop, web-terminal, list, destroy]

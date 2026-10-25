@@ -13,6 +13,7 @@ usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation create [NAME] [--machine-type TYPE] [--web-terminal]
 Commands: create, start, stop, list, shell, config-ssh, web-terminal, destroy
+web-terminal sets up browser access and issues a new password.
 Default name: main. Default machine type: e2-standard-2.
 Stop retains disk; destroy permanently deletes disk.
 HELP

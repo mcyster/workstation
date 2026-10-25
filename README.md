@@ -6,7 +6,7 @@ Workstation provides a persistent, remotely hosted development environment acces
 
 ## Usage
 
-Manage a workstation from **Actions → Workstation → Run workflow**. GitHub Actions lets you bootstrap and manage the environment using only a browser, without installing local tools. Create, start, stop, or destroy the workstation there; the workflow summary links to its browser interface.
+Manage a workstation from **Actions → Workstation → Run workflow**. GitHub Actions lets you bootstrap and manage the environment using only a browser, without installing local tools. Create, start, stop, set up browser access, issue a new password, or destroy the workstation there; the workflow summary links to its browser interface.
 
 Or use the command line:
 

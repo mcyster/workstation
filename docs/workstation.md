@@ -44,7 +44,7 @@ SSH keys are managed by gcloud. Once `config-ssh` has run, standard `ssh`, `scp`
 
 `create --web-terminal` provisions code-server (browser-based editor and shell) with a random password. Browse to `https://EXTERNAL_IP:8443` and accept the self-signed certificate warning. The workstation holds only an Argon2 password hash. The plaintext password is added to the Google Cloud Secret Manager secret `workstation-web-terminal-password`, which the workflow identity can append to, but cannot read. Use Secret Manager in the Google Cloud console to see the active password.
 
-Run `web-terminal` to reset a forgotten password. `start` rotates the password after a stopped VM resumes. `create` without the flag leaves port 8443 closed. Browser access is public on port 8443 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
+Run `web-terminal` to set up browser access or issue a new password. `start` rotates the password after a stopped VM resumes. `create` without the flag leaves port 8443 closed. Browser access is public on port 8443 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
 
 ## Provisioning and ownership
 
