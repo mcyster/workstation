@@ -1,0 +1,73 @@
+name: Workstation
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Action
+        type: choice
+        required: true
+        options: [create, start, stop, web-terminal, list, destroy]
+      name:
+        description: Workstation name
+        type: string
+        default: main
+      machine_type:
+        description: GCE machine type for create
+        type: string
+        default: e2-standard-2
+      web_terminal:
+        description: Browser editor on create
+        type: boolean
+        default: true
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  workstation:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT: ${{ vars.WORKSTATION_GCLOUD_PROJECT }}
+      ZONE: ${{ vars.WORKSTATION_GCLOUD_ZONE || 'us-central1-a' }}
+      PROVIDER: ${{ secrets.WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+      SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
+      ACTION: ${{ inputs.action }}
+      NAME: ${{ inputs.name }}
+      MACHINE_TYPE: ${{ inputs.machine_type }}
+      WEB_TERMINAL: ${{ inputs.web_terminal }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check cloud configuration
+        shell: bash
+        run: |
+          for variable in PROJECT PROVIDER SERVICE_ACCOUNT; do
+            if [[ -z "${!variable}" ]]; then echo "::error::$variable is not configured"; exit 1; fi
+          done
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Manage workstation
+        shell: bash
+        run: |
+          args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
+          if [[ "$ACTION" == create ]]; then
+            args+=(--machine-type "$MACHINE_TYPE")
+            [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
+          fi
+          if [[ "$ACTION" == destroy ]]; then args+=(--yes); fi
+          bash scripts/e-workstation "${args[@]}" > output.txt
+          {
+            echo "## Workstation $NAME"
+            echo "- Action: $ACTION"
+            echo "- Project: $PROJECT"
+            echo "- Zone: $ZONE"
+            sed -n 's/^web terminal: /- Browser: /p' output.txt
+            if grep -q '^secret:' output.txt; then
+              echo "- Password: https://console.cloud.google.com/security/secret-manager/secret/workstation-web-terminal-password?project=$PROJECT"
+            fi
+            echo '### Machines'
+            echo '```'
+            bash scripts/e-workstation list --project "$PROJECT" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
