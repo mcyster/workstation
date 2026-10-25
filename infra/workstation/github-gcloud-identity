@@ -1,59 +1,224 @@
 #!/usr/bin/env bash
-# Configure GitHub Actions OIDC access to a GCP project.
+# Configure keyless GitHub Actions access to a Google Cloud project.
 set -euo pipefail
-PROJECT=""; REPO=mcyster/workstation
-while (($#)); do
- case "$1" in
- --project) PROJECT="$2"; shift 2;;
- --repo) REPO="$2"; shift 2;;
- *) echo "Usage: $0 --project PROJECT [--repo OWNER/REPO]" >&2; exit 2;;
- esac
-done
-[[ -n "$PROJECT" && "$REPO" == */* ]] || { echo 'Project and valid repo required' >&2; exit 2; }
+
+readonly PROGRAM="${0##*/}"
+readonly DEFAULT_REPOSITORY="mcyster/workstation"
+readonly MAX_PROPAGATION_ATTEMPTS=60
+readonly PROPAGATION_DELAY_SECONDS=2
+readonly WORKLOAD_IDENTITY_POOL="workstation-actions"
+readonly WORKLOAD_IDENTITY_PROVIDER="github"
+readonly PASSWORD_SECRET="workstation-web-terminal-password"
+
+PROJECT=""
+REPOSITORY="$DEFAULT_REPOSITORY"
+PROJECT_NUMBER=""
+GITHUB_SERVICE_ACCOUNT=""
+COMPUTE_SERVICE_ACCOUNT=""
+WORKLOAD_IDENTITY_PREFIX=""
+
+usage() {
+  cat <<EOF
+Usage: $PROGRAM --project PROJECT [--repo OWNER/REPO]
+
+Configure GitHub Actions to manage Workstation resources in Google Cloud
+without storing a service-account key.
+
+Options:
+  --project PROJECT   Google Cloud project ID (required)
+  --repo OWNER/REPO  GitHub repository allowed to authenticate
+                     (default: $DEFAULT_REPOSITORY)
+  -h, --help         Show this help message
+
+The script prints the repository secrets required by the Workstation workflow.
+EOF
+}
+
+usage_error() {
+  printf '%s: %s\n\n' "$PROGRAM" "$1" >&2
+  usage >&2
+  exit 2
+}
+
+parse_arguments() {
+  while (($#)); do
+    case "$1" in
+      --project)
+        (($# >= 2)) || usage_error "Missing value for $1"
+        PROJECT="$2"
+        shift 2
+        ;;
+      --project=*)
+        PROJECT="${1#*=}"
+        shift
+        ;;
+      --repo)
+        (($# >= 2)) || usage_error "Missing value for $1"
+        REPOSITORY="$2"
+        shift 2
+        ;;
+      --repo=*)
+        REPOSITORY="${1#*=}"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage_error "Unknown argument: $1"
+        ;;
+    esac
+  done
+
+  [[ -n "$PROJECT" ]] || usage_error "--project is required"
+  [[ "$REPOSITORY" == */* ]] || usage_error "--repo must be OWNER/REPO"
+}
+
+load_project_context() {
+  PROJECT_NUMBER="$(
+    gcloud projects describe "$PROJECT" --format='value(projectNumber)'
+  )"
+  GITHUB_SERVICE_ACCOUNT="github-actions@$PROJECT.iam.gserviceaccount.com"
+  COMPUTE_SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+  WORKLOAD_IDENTITY_PREFIX="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL"
+}
+
+enable_required_apis() {
+  local api
+  local apis=(
+    compute.googleapis.com
+    iam.googleapis.com
+    iamcredentials.googleapis.com
+    sts.googleapis.com
+    secretmanager.googleapis.com
+  )
+
+  for api in "${apis[@]}"; do
+    gcloud services enable "$api" --project "$PROJECT" >/dev/null
+  done
+}
+
 wait_for_service_account() {
- local account="$1" attempt
- for attempt in {1..60}; do
-  if gcloud iam service-accounts describe "$account" --project "$PROJECT" >/dev/null 2>&1; then return 0; fi
-  if ((attempt == 60)); then echo "Service account $account did not become available" >&2; return 1; fi
-  echo "Waiting for service account $account..." >&2
-  sleep 2
- done
+  local account="$1"
+  local attempt
+
+  for ((attempt = 1; attempt <= MAX_PROPAGATION_ATTEMPTS; attempt++)); do
+    if gcloud iam service-accounts describe "$account" --project "$PROJECT" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if ((attempt == MAX_PROPAGATION_ATTEMPTS)); then
+      echo "Service account $account did not become available" >&2
+      return 1
+    fi
+
+    echo "Waiting for service account $account..." >&2
+    sleep "$PROPAGATION_DELAY_SECONDS"
+  done
 }
+
 retry_iam_binding() {
- local attempt output
- for attempt in {1..60}; do
-  if output="$("$@" 2>&1)"; then return 0; fi
-  if ((attempt == 60)); then printf '%s\n' "$output" >&2; return 1; fi
-  echo 'Waiting for IAM propagation...' >&2
-  sleep 2
- done
+  local description="$1"
+  local attempt output
+  shift
+
+  for ((attempt = 1; attempt <= MAX_PROPAGATION_ATTEMPTS; attempt++)); do
+    if output="$("$@" 2>&1)"; then
+      return 0
+    fi
+
+    if ((attempt == MAX_PROPAGATION_ATTEMPTS)); then
+      printf '%s\n' "$output" >&2
+      return 1
+    fi
+
+    echo "Waiting for IAM propagation while $description..." >&2
+    sleep "$PROPAGATION_DELAY_SECONDS"
+  done
 }
-NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
-SA="github-actions@$PROJECT.iam.gserviceaccount.com"
-POOL=workstation-actions
-PROVIDER=github
-PREFIX="projects/$NUMBER/locations/global/workloadIdentityPools/$POOL"
-for api in compute.googleapis.com iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com secretmanager.googleapis.com; do
- gcloud services enable "$api" --project "$PROJECT" >/dev/null
-done
-if ! gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1; then
- gcloud iam service-accounts create github-actions --project "$PROJECT" --display-name 'Workstation GitHub Actions'
-fi
-wait_for_service_account "$SA"
-retry_iam_binding gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/compute.admin
-COMPUTE_SA="$NUMBER-compute@developer.gserviceaccount.com"
-wait_for_service_account "$COMPUTE_SA"
-retry_iam_binding gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" --project "$PROJECT" --member "serviceAccount:$SA" --role roles/iam.serviceAccountUser
-if ! gcloud iam workload-identity-pools describe "$POOL" --location global --project "$PROJECT" >/dev/null 2>&1; then
- gcloud iam workload-identity-pools create "$POOL" --location global --project "$PROJECT" >/dev/null
-fi
-if ! gcloud iam workload-identity-pools providers describe "$PROVIDER" --workload-identity-pool "$POOL" --location global --project "$PROJECT" >/dev/null 2>&1; then
- gcloud iam workload-identity-pools providers create-oidc "$PROVIDER" --workload-identity-pool "$POOL" --location global --project "$PROJECT" --issuer-uri https://token.actions.githubusercontent.com --attribute-mapping 'google.subject=assertion.sub,attribute.repository=assertion.repository' --attribute-condition "assertion.repository == '$REPO'" >/dev/null
-fi
-gcloud iam service-accounts add-iam-policy-binding "$SA" --project "$PROJECT" --role roles/iam.workloadIdentityUser --member "principalSet://iam.googleapis.com/$PREFIX/attribute.repository/$REPO" >/dev/null
-SECRET=workstation-web-terminal-password
-if ! gcloud secrets describe "$SECRET" --project "$PROJECT" >/dev/null 2>&1; then
- gcloud secrets create "$SECRET" --project "$PROJECT" --replication-policy automatic >/dev/null
-fi
-gcloud secrets add-iam-policy-binding "$SECRET" --project "$PROJECT" --member "serviceAccount:$SA" --role roles/secretmanager.secretVersionAdder >/dev/null
-printf 'WORKSTATION_GCLOUD_SERVICE_ACCOUNT=%s\nWORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER=%s/providers/%s\n' "$SA" "$PREFIX" "$PROVIDER"
+
+configure_github_service_account() {
+  if ! gcloud iam service-accounts describe "$GITHUB_SERVICE_ACCOUNT" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud iam service-accounts create github-actions \
+      --project "$PROJECT" \
+      --display-name "Workstation GitHub Actions"
+  fi
+
+  wait_for_service_account "$GITHUB_SERVICE_ACCOUNT"
+
+  retry_iam_binding "granting Compute Admin to GitHub Actions" \
+    gcloud projects add-iam-policy-binding "$PROJECT" \
+      --member "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
+      --role roles/compute.admin
+}
+
+grant_compute_service_account_access() {
+  wait_for_service_account "$COMPUTE_SERVICE_ACCOUNT"
+
+  retry_iam_binding "granting access to the Compute Engine service account" \
+    gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SERVICE_ACCOUNT" \
+      --project "$PROJECT" \
+      --member "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
+      --role roles/iam.serviceAccountUser
+}
+
+configure_workload_identity() {
+  if ! gcloud iam workload-identity-pools describe "$WORKLOAD_IDENTITY_POOL" \
+    --location global --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud iam workload-identity-pools create "$WORKLOAD_IDENTITY_POOL" \
+      --location global \
+      --project "$PROJECT" >/dev/null
+  fi
+
+  if ! gcloud iam workload-identity-pools providers describe "$WORKLOAD_IDENTITY_PROVIDER" \
+    --workload-identity-pool "$WORKLOAD_IDENTITY_POOL" \
+    --location global --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud iam workload-identity-pools providers create-oidc "$WORKLOAD_IDENTITY_PROVIDER" \
+      --workload-identity-pool "$WORKLOAD_IDENTITY_POOL" \
+      --location global \
+      --project "$PROJECT" \
+      --issuer-uri https://token.actions.githubusercontent.com \
+      --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository" \
+      --attribute-condition "assertion.repository == '$REPOSITORY'" >/dev/null
+  fi
+
+  retry_iam_binding "allowing the GitHub repository to authenticate" \
+    gcloud iam service-accounts add-iam-policy-binding "$GITHUB_SERVICE_ACCOUNT" \
+      --project "$PROJECT" \
+      --role roles/iam.workloadIdentityUser \
+      --member "principalSet://iam.googleapis.com/$WORKLOAD_IDENTITY_PREFIX/attribute.repository/$REPOSITORY"
+}
+
+configure_password_secret() {
+  if ! gcloud secrets describe "$PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets create "$PASSWORD_SECRET" \
+      --project "$PROJECT" \
+      --replication-policy automatic >/dev/null
+  fi
+
+  retry_iam_binding "granting access to append password versions" \
+    gcloud secrets add-iam-policy-binding "$PASSWORD_SECRET" \
+      --project "$PROJECT" \
+      --member "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
+      --role roles/secretmanager.secretVersionAdder
+}
+
+print_github_settings() {
+  printf 'WORKSTATION_GCLOUD_SERVICE_ACCOUNT=%s\n' "$GITHUB_SERVICE_ACCOUNT"
+  printf 'WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER=%s/providers/%s\n' \
+    "$WORKLOAD_IDENTITY_PREFIX" "$WORKLOAD_IDENTITY_PROVIDER"
+}
+
+main() {
+  parse_arguments "$@"
+  load_project_context
+  enable_required_apis
+  configure_github_service_account
+  grant_compute_service_account_access
+  configure_workload_identity
+  configure_password_secret
+  print_github_settings
+}
+
+main "$@"
