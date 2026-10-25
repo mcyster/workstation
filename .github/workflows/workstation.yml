@@ -67,7 +67,14 @@ jobs:
               echo "- Password: https://console.cloud.google.com/security/secret-manager/secret/workstation-web-terminal-password?project=$PROJECT"
             fi
             echo '### Machines'
-            echo '```'
-            bash scripts/workstation list --project "$PROJECT" || true
-            echo '```'
+            echo '| Name | Status | Machine type | Zone | IP | Browser | Password |'
+            echo '| --- | --- | --- | --- | --- | --- | --- |'
+            while IFS=, read -r machine status machine_type zone ip browser password; do
+              [[ -n "$machine" ]] || continue
+              browser_link='—'
+              password_link='—'
+              [[ -z "$browser" ]] || browser_link="[Open]($browser)"
+              [[ -z "$password" ]] || password_link="[Secret Manager]($password)"
+              echo "| $machine | $status | $machine_type | $zone | $ip | $browser_link | $password_link |"
+            done < <(bash scripts/workstation list --project "$PROJECT" || true)
           } >> "$GITHUB_STEP_SUMMARY"
