@@ -20,4 +20,4 @@ scripts/workstation destroy main
 
 ## Setup
 
-Follow the [setup and operations guide](docs/workstation.md) to configure the current Google Compute Engine implementation and GitHub Actions workflow.
+The current hosting implementation requires a Google Cloud project. You can reuse an existing project or create one with a unique Project ID such as `mcyster-dev`. Follow the [Google Cloud project setup](docs/workstation.md#google-cloud-project-setup) to bootstrap a workstation entirely from your browser.

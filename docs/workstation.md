@@ -2,28 +2,87 @@
 
 A workstation is a persistent Ubuntu VM on Google Compute Engine. It is not tied to a code repository. First boot creates a `developer` user and installs Git, Nix, direnv, and nix-direnv. Clone projects, install tools, and run agents inside it as you would on a local computer.
 
-## Prerequisites
+## Google Cloud project setup
 
-- Google Cloud project with billing enabled and the Compute Engine, IAM, STS, and Secret Manager APIs.
-- Google Cloud CLI (`gcloud`) for local commands and initial setup.
-- Project IAM permissions to configure service accounts, workload identity, and compute resources.
+Complete these steps in a browser. Use a Google account that can manage billing and IAM for the project.
 
-The included Nix development shell provides `gcloud` and adds `scripts/` to `PATH`. With Nix and direnv installed, run `direnv allow` to load it automatically.
+### 1. Create a project
+
+Open [Create a project](https://console.cloud.google.com/projectcreate). A project groups the workstation's VMs, disks, credentials, and billing.
+
+Choose a project name, such as `My Development Workstations`. Choose a globally unique Project ID, such as `mcyster-dev`. Project IDs cannot be changed after creation. This guide calls that ID `PROJECT`. You can reuse an existing project instead.
+
+### 2. Enable billing
+
+Open [Google Cloud Billing](https://console.cloud.google.com/billing). Select the project and associate it with a billing account. Compute Engine requires billing.
+
+Create a [budget alert](https://console.cloud.google.com/billing/budgets) to monitor costs. Budget alerts send notifications. They do not impose a spending limit.
+
+### 3. Open Cloud Shell
+
+Open [Google Cloud Shell](https://console.cloud.google.com/?cloudshell=true). Cloud Shell is a browser-based terminal with `gcloud` already installed. No local software is required.
+
+Replace `PROJECT` with the Project ID and run:
+
+```sh
+gcloud config set project PROJECT
+gcloud billing projects describe PROJECT
+```
+
+The billing check should report `billingEnabled: true`.
+
+### 4. Bootstrap GitHub authentication
+
+GitHub Actions uses Workload Identity Federation. It can manage the workstation without storing a Google Cloud service-account key.
+
+In Cloud Shell, replace `OWNER` with the GitHub account or organization that owns the repository, then run:
+
+```sh
+git clone https://github.com/OWNER/workstation.git
+cd workstation
+
+bash infra/workstation/gcloud-identity \
+  --project PROJECT \
+  --repo OWNER/workstation
+```
+
+The script enables the required APIs and creates the Google Cloud service account, permissions, identity provider, and Secret Manager secret. It prints values for `WORKSTATION_GCLOUD_SERVICE_ACCOUNT` and `WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER`.
+
+In GitHub, open **Repository → Settings → Secrets and variables → Actions**. Add these repository settings:
+
+**Variables**
+
+- `WORKSTATION_GCLOUD_PROJECT`: the Project ID, such as `mcyster-dev`.
+- `WORKSTATION_GCLOUD_ZONE`: optional; defaults to `us-central1-a`.
+
+**Secrets**
+
+- `WORKSTATION_GCLOUD_SERVICE_ACCOUNT`: the service account value printed by the script.
+- `WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER`: the identity provider value printed by the script.
+
+The bootstrap script is idempotent, but review existing IAM configuration before using it in an established project.
+
+### 5. Create the workstation
+
+Open the repository's [GitHub Actions page](https://github.com/mcyster/workstation/actions). Select **Workstation**, choose **Run workflow**, set the action to `create`, and run it. The default name is `main`, and browser access is enabled by default.
+
+After the workflow succeeds, open its summary. The summary shows the browser URL and a password link to Google Cloud Secret Manager.
+
+## GitHub workflow
+
+Use **Actions → Workstation → Run workflow** to run `start`, `stop`, `web-terminal`, `list`, or `destroy` after setup. `web-terminal` sets up browser access or issues a new password. The summary links to Secret Manager but never prints the password.
+
+## Local CLI
+
+As an alternative to the browser workflow, install and authenticate the Google Cloud CLI locally:
 
 ```sh
 gcloud auth login
 gcloud config set project PROJECT
 gcloud config set compute/zone us-central1-a
-bash infra/workstation/gcloud-identity --project PROJECT --repo mcyster/workstation
 ```
 
-Enter the returned service account and identity provider as repository **Actions secrets** `WORKSTATION_GCLOUD_SERVICE_ACCOUNT` and `WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER`. Enter `WORKSTATION_GCLOUD_PROJECT` as an **Actions variable**, with `WORKSTATION_GCLOUD_ZONE` optional (default `us-central1-a`). The bootstrap script is idempotent, but review any existing IAM configuration before using it.
-
-## GitHub workflow
-
-Open **Actions → Workstation → Run workflow**. Choose `create`, `start`, `stop`, `web-terminal`, `list`, or `destroy`, and optionally provide a machine name (`main` by default). `create` enables the browser editor by default. The summary provides the external URL and a Secret Manager link, but never prints the password.
-
-## CLI
+The included Nix development shell provides `gcloud` and adds `scripts/` to `PATH`. With Nix and direnv installed, run `direnv allow` to load it automatically.
 
 ```sh
 scripts/workstation create main --machine-type e2-standard-2 --web-terminal
