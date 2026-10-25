@@ -8,7 +8,7 @@ A workstation is a persistent Ubuntu VM on Google Compute Engine. It is not tied
 - Google Cloud CLI (`gcloud`) for local commands and initial setup.
 - Project IAM permissions to configure service accounts, workload identity, and compute resources.
 
-The included Nix development shell provides `gcloud`. With Nix and direnv installed, run `direnv allow` to load it automatically.
+The included Nix development shell provides `gcloud` and adds `scripts/` to `PATH`. With Nix and direnv installed, run `direnv allow` to load it automatically.
 
 ```sh
 gcloud auth login
