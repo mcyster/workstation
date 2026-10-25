@@ -10,6 +10,24 @@ while (($#)); do
  esac
 done
 [[ -n "$PROJECT" && "$REPO" == */* ]] || { echo 'Project and valid repo required' >&2; exit 2; }
+wait_for_service_account() {
+ local account="$1" attempt
+ for attempt in {1..60}; do
+  if gcloud iam service-accounts describe "$account" --project "$PROJECT" >/dev/null 2>&1; then return 0; fi
+  if ((attempt == 60)); then echo "Service account $account did not become available" >&2; return 1; fi
+  echo "Waiting for service account $account..." >&2
+  sleep 2
+ done
+}
+retry_iam_binding() {
+ local attempt output
+ for attempt in {1..60}; do
+  if output="$("$@" 2>&1)"; then return 0; fi
+  if ((attempt == 60)); then printf '%s\n' "$output" >&2; return 1; fi
+  echo 'Waiting for IAM propagation...' >&2
+  sleep 2
+ done
+}
 NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 SA="github-actions@$PROJECT.iam.gserviceaccount.com"
 POOL=workstation-actions
@@ -21,9 +39,11 @@ done
 if ! gcloud iam service-accounts describe "$SA" --project "$PROJECT" >/dev/null 2>&1; then
  gcloud iam service-accounts create github-actions --project "$PROJECT" --display-name 'Workstation GitHub Actions'
 fi
-gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/compute.admin >/dev/null
+wait_for_service_account "$SA"
+retry_iam_binding gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/compute.admin
 COMPUTE_SA="$NUMBER-compute@developer.gserviceaccount.com"
-gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" --project "$PROJECT" --member "serviceAccount:$SA" --role roles/iam.serviceAccountUser >/dev/null
+wait_for_service_account "$COMPUTE_SA"
+retry_iam_binding gcloud iam service-accounts add-iam-policy-binding "$COMPUTE_SA" --project "$PROJECT" --member "serviceAccount:$SA" --role roles/iam.serviceAccountUser
 if ! gcloud iam workload-identity-pools describe "$POOL" --location global --project "$PROJECT" >/dev/null 2>&1; then
  gcloud iam workload-identity-pools create "$POOL" --location global --project "$PROJECT" >/dev/null
 fi
