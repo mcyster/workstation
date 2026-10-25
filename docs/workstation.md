@@ -99,6 +99,8 @@ Override `--project` and `--zone` per command, or use `gcloud` configuration. `c
 
 `list` includes the browser URL and Secret Manager password link for each workstation with browser access enabled. The GitHub Actions summary renders the same links.
 
+After upgrading an existing installation to per-workstation secrets, rerun `github-gcloud-identity`, then run `web-terminal` once for each existing workstation. This creates its named secret and makes the password link available in `list`.
+
 SSH keys are managed by gcloud. Once `config-ssh` has run, standard `ssh`, `scp`, and `rsync` can be used.
 
 ## Browser access

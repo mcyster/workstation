@@ -122,8 +122,12 @@ case "$ACTION" in
         [[ "$managed" == true ]] || continue
         printf '%s,%s,%s,%s,%s' "$instance" "$state" "$machine" "$zone" "$ip"
         if [[ "$tags" == *"$TAG"* && -n "$ip" ]]; then
-          printf ',https://%s:8443,https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
-            "$ip" "$instance-web-terminal-password" "$PROJECT"
+          secret="$instance-web-terminal-password"
+          printf ',https://%s:8443,' "$ip"
+          if gcloud secrets describe "$secret" --project "$PROJECT" >/dev/null 2>&1; then
+            printf 'https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
+              "$secret" "$PROJECT"
+          fi
         fi
         printf '\n'
       done
