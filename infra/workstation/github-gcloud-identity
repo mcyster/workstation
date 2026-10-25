@@ -4,6 +4,7 @@ set -euo pipefail
 
 readonly PROGRAM="${0##*/}"
 readonly DEFAULT_REPOSITORY="mcyster/workstation"
+readonly DEFAULT_ZONE="us-central1-a"
 readonly MAX_PROPAGATION_ATTEMPTS=60
 readonly PROPAGATION_DELAY_SECONDS=2
 readonly WORKLOAD_IDENTITY_POOL="workstation-actions"
@@ -30,7 +31,7 @@ Options:
                      (default: $DEFAULT_REPOSITORY)
   -h, --help         Show this help message
 
-The script prints the repository secrets required by the Workstation workflow.
+The script prints the repository variables and secrets required by the workflow.
 EOF
 }
 
@@ -205,9 +206,15 @@ configure_password_secret() {
 }
 
 print_github_settings() {
-  printf 'WORKSTATION_GCLOUD_SERVICE_ACCOUNT=%s\n' "$GITHUB_SERVICE_ACCOUNT"
-  printf 'WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER=%s/providers/%s\n' \
-    "$WORKLOAD_IDENTITY_PREFIX" "$WORKLOAD_IDENTITY_PROVIDER"
+  cat <<EOF
+GitHub Repository Variables
+  WORKSTATION_GCLOUD_PROJECT: $PROJECT
+  WORKSTATION_GCLOUD_ZONE: $DEFAULT_ZONE (optional)
+
+GitHub Repository Secrets
+  WORKSTATION_GCLOUD_SERVICE_ACCOUNT: $GITHUB_SERVICE_ACCOUNT
+  WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER: $WORKLOAD_IDENTITY_PREFIX/providers/$WORKLOAD_IDENTITY_PROVIDER
+EOF
 }
 
 main() {
