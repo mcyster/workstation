@@ -56,7 +56,7 @@ jobs:
             [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
           fi
           if [[ "$ACTION" == destroy ]]; then args+=(--yes); fi
-          bash scripts/e-workstation "${args[@]}" > output.txt
+          bash scripts/workstation "${args[@]}" > output.txt
           {
             echo "## Workstation $NAME"
             echo "- Action: $ACTION"
@@ -68,6 +68,6 @@ jobs:
             fi
             echo '### Machines'
             echo '```'
-            bash scripts/e-workstation list --project "$PROJECT" || true
+            bash scripts/workstation list --project "$PROJECT" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

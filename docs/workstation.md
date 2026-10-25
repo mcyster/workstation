@@ -24,14 +24,14 @@ Open **Actions → Workstation → Run workflow**. Choose `create`, `start`, `st
 ## CLI
 
 ```sh
-scripts/e-workstation create main --machine-type e2-standard-2 --web-terminal
-scripts/e-workstation list
-scripts/e-workstation shell main
-scripts/e-workstation config-ssh main
-scripts/e-workstation stop main
-scripts/e-workstation start main
-scripts/e-workstation web-terminal main
-scripts/e-workstation destroy main
+scripts/workstation create main --machine-type e2-standard-2 --web-terminal
+scripts/workstation list
+scripts/workstation shell main
+scripts/workstation config-ssh main
+scripts/workstation stop main
+scripts/workstation start main
+scripts/workstation web-terminal main
+scripts/workstation destroy main
 ```
 
 Override `--project` and `--zone` per command, or use `gcloud` configuration. `create` leaves existing machines unchanged; `start` preserves the disk. `destroy` removes the VM and boot disk; interactive CLI runs ask for confirmation, while the GitHub action uses `--yes`.
@@ -46,7 +46,7 @@ Run `web-terminal` to reset a forgotten password. `start` rotates the password a
 
 ## Provisioning and ownership
 
-- `scripts/e-workstation`: instance lifecycle, firewall, SSH, and password rotation.
+- `scripts/workstation`: instance lifecycle, firewall, SSH, and password rotation.
 - `infra/workstation/setup`: idempotent first-boot host provisioning, embedded in cloud-init metadata.
 - `infra/workstation/web-terminal`: code-server service and password hash updates.
 - `infra/workstation/gcloud-identity`: workload identity, service account, and Secret Manager setup.

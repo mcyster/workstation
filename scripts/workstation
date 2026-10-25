@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Standalone Google Compute Engine workstation CLI.
+# Workstation command-line interface for Google Compute Engine.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAME=main
@@ -10,14 +10,14 @@ WEB=false
 YES=false
 ACTION=""
 usage() { cat <<'HELP'
-Usage: e-workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
-       e-workstation create [NAME] [--machine-type TYPE] [--web-terminal]
+Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
+       workstation create [NAME] [--machine-type TYPE] [--web-terminal]
 Commands: create, start, stop, list, shell, config-ssh, web-terminal, destroy
 Default name: main. Default machine type: e2-standard-2.
 Stop retains disk; destroy permanently deletes disk.
 HELP
 }
-die() { echo "e-workstation: $*" >&2; exit 1; }
+die() { echo "workstation: $*" >&2; exit 1; }
 while (($#)); do
  case "$1" in
    -h|--help) usage; exit 0;;
