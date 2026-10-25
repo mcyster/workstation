@@ -97,6 +97,8 @@ scripts/workstation destroy main
 
 Override `--project` and `--zone` per command, or use `gcloud` configuration. `create` leaves existing machines unchanged; `start` preserves the disk. `destroy` removes the VM and boot disk; interactive CLI runs ask for confirmation, while the GitHub action uses `--yes`.
 
+`list` includes the browser URL and Secret Manager password link for each workstation with browser access enabled. The GitHub Actions summary renders the same links.
+
 SSH keys are managed by gcloud. Once `config-ssh` has run, standard `ssh`, `scp`, and `rsync` can be used.
 
 ## Browser access
