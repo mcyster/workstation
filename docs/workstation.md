@@ -41,7 +41,7 @@ In Cloud Shell, replace `OWNER` with the GitHub account or organization that own
 git clone https://github.com/OWNER/workstation.git
 cd workstation
 
-bash infra/workstation/gcloud-identity \
+bash infra/workstation/github-gcloud-identity \
   --project PROJECT \
   --repo OWNER/workstation
 ```
@@ -110,7 +110,7 @@ Run `web-terminal` to set up browser access or issue a new password. `start` rot
 - `scripts/workstation`: instance lifecycle, firewall, SSH, and password rotation.
 - `infra/workstation/setup`: idempotent first-boot host provisioning, embedded in cloud-init metadata.
 - `infra/workstation/web-terminal`: code-server service and password hash updates.
-- `infra/workstation/gcloud-identity`: workload identity, service account, and Secret Manager setup.
+- `infra/workstation/github-gcloud-identity`: workload identity, service account, and Secret Manager setup.
 - `.github/workflows/workstation.yml`: manual action, using Workload Identity Federation.
 
 VMs have names `workstation-NAME` and the label `managed-workstation=true`. The CLI refuses to destroy an instance without its ownership label. Workstations are independent of tog and do not clone any repository automatically.
