@@ -20,7 +20,7 @@ on:
         type: boolean
         default: true
       environment:
-        description: GitHub Environment and environments/NAME.sh to apply
+        description: Optional environment; see environments/NAME.sh
         type: string
         required: false
 permissions:
