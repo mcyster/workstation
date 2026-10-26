@@ -6,7 +6,7 @@ on:
         description: Action (web-terminal sets up access and issues a new password)
         type: choice
         required: true
-        options: [create, start, stop, web-terminal, list, destroy]
+        options: [create, configure, start, stop, web-terminal, list, destroy]
       name:
         description: Workstation name
         type: string
@@ -19,6 +19,10 @@ on:
         description: Browser editor on create
         type: boolean
         default: true
+      environment:
+        description: GitHub Environment and environments/NAME.sh to apply
+        type: string
+        required: false
 permissions:
   id-token: write
   contents: read
@@ -34,6 +38,7 @@ jobs:
       NAME: ${{ inputs.name }}
       MACHINE_TYPE: ${{ inputs.machine_type }}
       WEB_TERMINAL: ${{ inputs.web_terminal }}
+      ENVIRONMENT: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
@@ -50,13 +55,18 @@ jobs:
       - name: Manage workstation
         shell: bash
         run: |
-          args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
-          if [[ "$ACTION" == create ]]; then
-            args+=(--machine-type "$MACHINE_TYPE")
-            [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
+          if [[ "$ACTION" == configure ]]; then
+            if [[ -z "$ENVIRONMENT" ]]; then echo '::error::configure requires an environment'; exit 1; fi
+            echo "environment: $ENVIRONMENT" > output.txt
+          else
+            args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
+            if [[ "$ACTION" == create ]]; then
+              args+=(--machine-type "$MACHINE_TYPE")
+              [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
+            fi
+            if [[ "$ACTION" == destroy ]]; then args+=(--yes); fi
+            bash scripts/workstation "${args[@]}" > output.txt
           fi
-          if [[ "$ACTION" == destroy ]]; then args+=(--yes); fi
-          bash scripts/workstation "${args[@]}" > output.txt
           {
             echo "## Workstation $NAME"
             echo "- Action: $ACTION"
@@ -75,4 +85,122 @@ jobs:
               [[ -z "$password" ]] || password_link="[Secret Manager]($password)"
               echo "| $machine | $status | $machine_type | $zone | $ip | $browser_link | $password_link |"
             done < <(bash scripts/workstation list --project "$PROJECT" || true)
+          } >> "$GITHUB_STEP_SUMMARY"
+  discover_environment:
+    needs: workstation
+    if: ${{ always() && needs.workstation.result == 'success' && inputs.environment != '' && (inputs.action == 'create' || inputs.action == 'configure') }}
+    runs-on: ubuntu-latest
+    outputs:
+      secret_1: ${{ steps.secrets.outputs.secret_1 }}
+      secret_2: ${{ steps.secrets.outputs.secret_2 }}
+      secret_3: ${{ steps.secrets.outputs.secret_3 }}
+      secret_4: ${{ steps.secrets.outputs.secret_4 }}
+      secret_5: ${{ steps.secrets.outputs.secret_5 }}
+      secret_6: ${{ steps.secrets.outputs.secret_6 }}
+      secret_7: ${{ steps.secrets.outputs.secret_7 }}
+      secret_8: ${{ steps.secrets.outputs.secret_8 }}
+      secret_9: ${{ steps.secrets.outputs.secret_9 }}
+      secret_10: ${{ steps.secrets.outputs.secret_10 }}
+      secret_11: ${{ steps.secrets.outputs.secret_11 }}
+      secret_12: ${{ steps.secrets.outputs.secret_12 }}
+      secret_13: ${{ steps.secrets.outputs.secret_13 }}
+      secret_14: ${{ steps.secrets.outputs.secret_14 }}
+      secret_15: ${{ steps.secrets.outputs.secret_15 }}
+      secret_16: ${{ steps.secrets.outputs.secret_16 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read environment requirements
+        id: secrets
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          [[ "$ENVIRONMENT" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo '::error::Invalid environment name'; exit 1; }
+          script="environments/$ENVIRONMENT.sh"
+          [[ -f "$script" ]] || { echo "::error::Environment script not found: $script"; exit 1; }
+          mapfile -t required < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
+          ((${#required[@]} <= 16)) || { echo '::error::Environment scripts support at most 16 secrets'; exit 1; }
+          for index in {1..16}; do
+            echo "secret_$index=${required[index-1]:-}" >> "$GITHUB_OUTPUT"
+          done
+  configure:
+    needs: [workstation, discover_environment]
+    if: ${{ always() && needs.workstation.result == 'success' && needs.discover_environment.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      PROJECT: ${{ vars.WORKSTATION_GCLOUD_PROJECT }}
+      ZONE: ${{ vars.WORKSTATION_GCLOUD_ZONE || 'us-central1-a' }}
+      PROVIDER: ${{ secrets.WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+      SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
+      NAME: ${{ inputs.name }}
+      ENVIRONMENT: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check cloud configuration
+        shell: bash
+        run: |
+          for variable in PROJECT PROVIDER SERVICE_ACCOUNT; do
+            if [[ -z "${!variable}" ]]; then echo "::error::$variable is not configured"; exit 1; fi
+          done
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure environment
+        shell: bash
+        env:
+          WORKSTATION_SECRET_1_NAME: ${{ needs.discover_environment.outputs.secret_1 }}
+          WORKSTATION_SECRET_1_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_1] }}
+          WORKSTATION_SECRET_2_NAME: ${{ needs.discover_environment.outputs.secret_2 }}
+          WORKSTATION_SECRET_2_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_2] }}
+          WORKSTATION_SECRET_3_NAME: ${{ needs.discover_environment.outputs.secret_3 }}
+          WORKSTATION_SECRET_3_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_3] }}
+          WORKSTATION_SECRET_4_NAME: ${{ needs.discover_environment.outputs.secret_4 }}
+          WORKSTATION_SECRET_4_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_4] }}
+          WORKSTATION_SECRET_5_NAME: ${{ needs.discover_environment.outputs.secret_5 }}
+          WORKSTATION_SECRET_5_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_5] }}
+          WORKSTATION_SECRET_6_NAME: ${{ needs.discover_environment.outputs.secret_6 }}
+          WORKSTATION_SECRET_6_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_6] }}
+          WORKSTATION_SECRET_7_NAME: ${{ needs.discover_environment.outputs.secret_7 }}
+          WORKSTATION_SECRET_7_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_7] }}
+          WORKSTATION_SECRET_8_NAME: ${{ needs.discover_environment.outputs.secret_8 }}
+          WORKSTATION_SECRET_8_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_8] }}
+          WORKSTATION_SECRET_9_NAME: ${{ needs.discover_environment.outputs.secret_9 }}
+          WORKSTATION_SECRET_9_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_9] }}
+          WORKSTATION_SECRET_10_NAME: ${{ needs.discover_environment.outputs.secret_10 }}
+          WORKSTATION_SECRET_10_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_10] }}
+          WORKSTATION_SECRET_11_NAME: ${{ needs.discover_environment.outputs.secret_11 }}
+          WORKSTATION_SECRET_11_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_11] }}
+          WORKSTATION_SECRET_12_NAME: ${{ needs.discover_environment.outputs.secret_12 }}
+          WORKSTATION_SECRET_12_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_12] }}
+          WORKSTATION_SECRET_13_NAME: ${{ needs.discover_environment.outputs.secret_13 }}
+          WORKSTATION_SECRET_13_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_13] }}
+          WORKSTATION_SECRET_14_NAME: ${{ needs.discover_environment.outputs.secret_14 }}
+          WORKSTATION_SECRET_14_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_14] }}
+          WORKSTATION_SECRET_15_NAME: ${{ needs.discover_environment.outputs.secret_15 }}
+          WORKSTATION_SECRET_15_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_15] }}
+          WORKSTATION_SECRET_16_NAME: ${{ needs.discover_environment.outputs.secret_16 }}
+          WORKSTATION_SECRET_16_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_16] }}
+        run: |
+          for index in {1..16}; do
+            name_variable="WORKSTATION_SECRET_${index}_NAME"
+            value_variable="WORKSTATION_SECRET_${index}_VALUE"
+            name="${!name_variable}"
+            [[ -n "$name" ]] || continue
+            value="${!value_variable}"
+            if [[ -z "$value" ]]; then echo "::error::GitHub Environment secret is not configured: $name"; exit 1; fi
+            export "$name=$value"
+          done
+          bash scripts/workstation configure "$NAME" \
+            --project "$PROJECT" \
+            --zone "$ZONE" \
+            --environment "$ENVIRONMENT" > output.txt
+          {
+            echo "## Environment $ENVIRONMENT"
+            echo "- Workstation: $NAME"
+            echo "- Project: $PROJECT"
+            sed -n 's/^environment: /- Applied: /p' output.txt
           } >> "$GITHUB_STEP_SUMMARY"
