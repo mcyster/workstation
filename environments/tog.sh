@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-checkout="$HOME/src/tog"
+checkout="$HOME/tog/main"
 mkdir -p "$(dirname "$checkout")"
 
 if [[ -d "$checkout/.git" ]]; then
