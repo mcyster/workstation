@@ -15,9 +15,14 @@ else
   git clone https://github.com/mcyster/tog.git "$checkout"
 fi
 
+if [[ ! -x "$HOME/.opencode/bin/opencode" ]]; then
+  curl -fsSL https://opencode.ai/v2/install | bash
+fi
+export PATH="$HOME/.opencode/bin:$PATH"
+opencode service set env OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+opencode --version
+
 (
   cd "$checkout"
   direnv allow
-  direnv exec . opencode service set env OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
-  direnv exec . opencode --version
 )
