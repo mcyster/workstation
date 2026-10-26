@@ -120,7 +120,7 @@ set -euo pipefail
 # Clone projects, install tools, authenticate clients, and run direnv here.
 ```
 
-Each directive must contain one GitHub secret name. The workflow exports only the declared values while the script runs. It does not write them to disk or include them in command arguments. The script decides whether and how a tool should persist its credentials.
+Each directive must contain one GitHub secret name, with up to 16 secrets per environment. The workflow exports only the declared values while the script runs. It does not write them to disk or include them in command arguments. The script decides whether and how a tool should persist its credentials.
 
 The script runs as `developer` with `HOME=/home/developer`. It also receives `WORKSTATION_NAME` and `WORKSTATION_ENVIRONMENT`. Make the script idempotent so it can be applied repeatedly.
 

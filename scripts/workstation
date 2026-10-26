@@ -78,20 +78,11 @@ ensure_setup() {
 }
 read_environment_secret() {
   local name="$1"
-  local value
 
   if [[ -v "$name" && -n "${!name}" ]]; then
     printf '%s' "${!name}"
     return 0
   fi
-
-  if [[ -n "${WORKSTATION_SECRETS_JSON:-}" ]]; then
-    command -v jq >/dev/null || die 'jq is required to read GitHub Environment secrets'
-    value="$(jq -er --arg name "$name" '.[$name] | select(type == "string" and length > 0)' <<< "$WORKSTATION_SECRETS_JSON")" || return 1
-    printf '%s' "$value"
-    return 0
-  fi
-
   return 1
 }
 configure_environment() {
