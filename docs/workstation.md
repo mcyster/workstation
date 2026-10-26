@@ -70,7 +70,7 @@ After the workflow succeeds, open its summary. The summary shows the browser URL
 
 ## GitHub workflow
 
-Use **Actions → Workstation → Run workflow** to run `start`, `stop`, `web-terminal`, `list`, or `destroy` after setup. `web-terminal` sets up browser access or issues a new password. The summary links to Secret Manager but never prints the password.
+Use **Actions → Workstation → Run workflow** to run `configure`, `start`, `stop`, `web-terminal`, `list`, or `destroy` after setup. `web-terminal` sets up browser access or issues a new password. The summary links to Secret Manager but never prints the password.
 
 ## Local CLI
 
@@ -86,6 +86,7 @@ The included Nix development shell provides `gcloud` and adds `scripts/` to `PAT
 
 ```sh
 scripts/workstation create main --machine-type e2-standard-2 --web-terminal
+scripts/workstation configure main --environment tog
 scripts/workstation list
 scripts/workstation shell main
 scripts/workstation config-ssh main
@@ -102,6 +103,37 @@ Override `--project` and `--zone` per command, or use `gcloud` configuration. `c
 After upgrading an existing installation to per-workstation secrets, rerun `github-gcloud-identity`, then run `web-terminal` once for each existing workstation. This creates its named secret and makes the password link available in `list`.
 
 SSH keys are managed by gcloud. Once `config-ssh` has run, standard `ssh`, `scp`, and `rsync` can be used.
+
+## Project environments
+
+An optional project environment is a version-controlled script at `environments/NAME.sh`. The name must match the GitHub Environment used by the workflow. For example, the GitHub Environment `tog` maps to `environments/tog.sh`.
+
+Declare required GitHub Environment secrets at the top of the script:
+
+```bash
+#!/usr/bin/env bash
+# workstation-secret: OPENCODE_API_KEY
+# workstation-secret: TOG_GITHUB_TOKEN
+
+set -euo pipefail
+
+# Clone projects, install tools, authenticate clients, and run direnv here.
+```
+
+Each directive must contain one GitHub secret name. The workflow exports only the declared values while the script runs. It does not write them to disk or include them in command arguments. The script decides whether and how a tool should persist its credentials.
+
+The script runs as `developer` with `HOME=/home/developer`. It also receives `WORKSTATION_NAME` and `WORKSTATION_ENVIRONMENT`. Make the script idempotent so it can be applied repeatedly.
+
+Create a GitHub Environment with the same name and add the declared secrets to it. Then select that environment when running `create` or `configure` in GitHub Actions. `create` provisions the workstation before applying the environment. `configure` reapplies it to an existing running workstation.
+
+The local CLI reads declared secrets from its current environment:
+
+```sh
+OPENCODE_API_KEY=... scripts/workstation create main --environment tog
+OPENCODE_API_KEY=... scripts/workstation configure main --environment tog
+```
+
+Environment scripts are trusted code with access to the secrets they declare. Protect the corresponding GitHub Environment and review script changes before running them.
 
 ## Browser access
 

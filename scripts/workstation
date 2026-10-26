@@ -8,14 +8,17 @@ ZONE=""
 MACHINE_TYPE=e2-standard-2
 IMAGE_PROJECT=ubuntu-os-cloud
 IMAGE_FAMILY=ubuntu-2404-lts-amd64
+ENVIRONMENT=""
 WEB=false
 YES=false
 ACTION=""
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
-       workstation create [NAME] [--machine-type TYPE] [--web-terminal]
-Commands: create, start, stop, list, shell, config-ssh, web-terminal, destroy
+       workstation create [NAME] [--machine-type TYPE] [--web-terminal] [--environment NAME]
+       workstation configure [NAME] --environment NAME
+Commands: create, configure, start, stop, list, shell, config-ssh, web-terminal, destroy
 web-terminal sets up browser access and issues a new password.
+configure applies environments/NAME.sh to a running workstation.
 Default name: main. Default machine type: e2-standard-2.
 Stop retains disk; destroy permanently deletes disk.
 HELP
@@ -24,13 +27,14 @@ die() { echo "workstation: $*" >&2; exit 1; }
 while (($#)); do
  case "$1" in
    -h|--help) usage; exit 0;;
-   --project|--zone|--machine-type) (($#>=2)) || die "Missing value for $1"; case "$1" in --project) PROJECT="$2";; --zone) ZONE="$2";; --machine-type) MACHINE_TYPE="$2";; esac; shift 2;;
+   --project|--zone|--machine-type|--environment) (($#>=2)) || die "Missing value for $1"; case "$1" in --project) PROJECT="$2";; --zone) ZONE="$2";; --machine-type) MACHINE_TYPE="$2";; --environment) ENVIRONMENT="$2";; esac; shift 2;;
    --project=*) PROJECT="${1#*=}"; shift;;
    --zone=*) ZONE="${1#*=}"; shift;;
    --machine-type=*) MACHINE_TYPE="${1#*=}"; shift;;
+   --environment=*) ENVIRONMENT="${1#*=}"; shift;;
    --web-terminal) WEB=true; shift;;
    --yes) YES=true; shift;;
-   create|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   create|configure|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
    *) NAME="$1"; shift;;
  esac
@@ -39,6 +43,10 @@ done
 if [[ ! "$NAME" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || ((${#NAME} > 47)); then
   die 'Invalid workstation name'
 fi
+if [[ -n "$ENVIRONMENT" && ! "$ENVIRONMENT" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]]; then
+  die 'Invalid environment name'
+fi
+[[ "$ACTION" != configure || -n "$ENVIRONMENT" ]] || die 'configure requires --environment'
 command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
@@ -67,6 +75,56 @@ ensure_setup() {
     gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/setup"
   fi
   gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
+}
+read_environment_secret() {
+  local name="$1"
+  local value
+
+  if [[ -v "$name" && -n "${!name}" ]]; then
+    printf '%s' "${!name}"
+    return 0
+  fi
+
+  if [[ -n "${WORKSTATION_SECRETS_JSON:-}" ]]; then
+    command -v jq >/dev/null || die 'jq is required to read GitHub Environment secrets'
+    value="$(jq -er --arg name "$name" '.[$name] | select(type == "string" and length > 0)' <<< "$WORKSTATION_SECRETS_JSON")" || return 1
+    printf '%s' "$value"
+    return 0
+  fi
+
+  return 1
+}
+configure_environment() {
+  local script="$ROOT/environments/$ENVIRONMENT.sh"
+  local bundle secret value
+
+  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+  [[ -f "$script" ]] || die "Environment script not found: environments/$ENVIRONMENT.sh"
+  ensure_setup
+
+  (
+    umask 077
+    bundle="$(mktemp)"
+    trap 'rm -f "$bundle"' EXIT
+
+    {
+      printf 'set -euo pipefail\nset +x\n'
+      printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$ENVIRONMENT"
+      printf 'export WORKSTATION_NAME=%q\n' "$NAME"
+      while IFS= read -r secret; do
+        if ! value="$(read_environment_secret "$secret")"; then
+          die "GitHub Environment secret is not configured: $secret"
+        fi
+        printf 'export %s=%q\n' "$secret" "$value"
+      done < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
+      cat "$script"
+    } > "$bundle"
+
+    gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet \
+      --command 'sudo -H -u developer bash -se' < "$bundle"
+  )
+
+  echo "environment: $ENVIRONMENT"
 }
 rotate() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
@@ -104,7 +162,9 @@ case "$ACTION" in
         --metadata-from-file="startup-script=$ROOT/infra/workstation/setup"
     else echo "$INSTANCE already exists"; fi
     if [[ "$WEB" == true ]]; then rotate; else ensure_setup; fi
-   ;;
+    [[ -z "$ENVIRONMENT" ]] || configure_environment
+    ;;
+  configure) configure_environment;;
  start)
    [[ -n "$(status)" ]] || die 'Workstation does not exist'
    if [[ "$(status)" != RUNNING ]]; then
