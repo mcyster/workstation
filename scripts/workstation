@@ -112,7 +112,7 @@ configure_environment() {
     } > "$bundle"
 
     gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet \
-      --command 'sudo -H -u developer bash -se' < "$bundle"
+      --command 'sudo -H -u developer bash -l -se' < "$bundle"
   )
 
   echo "environment: $ENVIRONMENT"
