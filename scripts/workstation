@@ -16,6 +16,8 @@ YES=false
 DOMAIN=""
 DNS_ZONE=""
 SKIP_DNS=false
+DYN_USER=""
+DYN_TOKEN=""
 ACTION=""
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
@@ -28,6 +30,8 @@ Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps pa
 --domain points HOST at the workstation (short-TTL DNS record, firewall 80/443) and requests a
 public Let's Encrypt certificate through Caddy; without it Caddy uses a self-signed cert.
 --dns-zone names the Google Cloud DNS zone; --no-dns skips DNS record creation.
+--dyn-user/--dyn-token (or $ZONEEDIT_DYN_USER/$ZONEEDIT_DYN_TOKEN) update ZoneEdit Dynamic DNS
+(e.g. api.cp.zoneedit.com/dyn/generic.php) instead of Google Cloud DNS.
 configure applies one or more environments (comma-separated) from environments/NAME.sh, in order.
 idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
@@ -48,6 +52,10 @@ while (($#)); do
    --dns-zone) (($#>=2)) || die "Missing value for $1"; DNS_ZONE="$2"; shift 2;;
    --dns-zone=*) DNS_ZONE="${1#*=}"; shift;;
    --no-dns) SKIP_DNS=true; shift;;
+   --dyn-user) (($#>=2)) || die "Missing value for $1"; DYN_USER="$2"; shift 2;;
+   --dyn-user=*) DYN_USER="${1#*=}"; shift;;
+   --dyn-token) (($#>=2)) || die "Missing value for $1"; DYN_TOKEN="$2"; shift 2;;
+   --dyn-token=*) DYN_TOKEN="${1#*=}"; shift;;
    --web-terminal) WEB=true; shift;;
    --opencode) OPENCODE=true; shift;;
    --yes) YES=true; shift;;
@@ -213,14 +221,34 @@ find_zone_for_domain() {
   done < <(gcloud dns managed-zones list --project "$PROJECT" --format='value(name,dnsName)' 2>/dev/null)
   printf '%s %s\n' "$best_name" "$best_dns"
 }
+zoneedit_update_dns() {
+  # Update a ZoneEdit Dynamic DNS record through the per-domain token API.
+  # The hostname must be defined as a Dynamic record in the zone first.
+  local ip="$1" output
+  DYN_USER="${DYN_USER:-${ZONEEDIT_DYN_USER:-}}"
+  DYN_TOKEN="${DYN_TOKEN:-${ZONEEDIT_DYN_TOKEN:-}}"
+  [[ -n "$DYN_TOKEN" ]] || return 1
+  [[ -n "$DYN_USER" ]] || die 'ZoneEdit update needs --dyn-user or the ZONEEDIT_DYN_USER environment variable'
+  if ! output="$(curl --get --fail --silent --show-error \
+      --user "$DYN_USER:$DYN_TOKEN" \
+      --data-urlencode "hostname=$DOMAIN" \
+      --data-urlencode "myip=$ip" \
+      "https://api.cp.zoneedit.com/dyn/generic.php" 2>&1)"; then
+    die "ZoneEdit update failed: $output"
+  fi
+  echo "zoneedit: $DOMAIN -> $ip ($output)"
+  echo "zoneedit: the hostname must be defined as a Dynamic record in the zone first"
+}
 ensure_domain_dns() {
   # Point DOMAIN at the workstation's external IP with a short TTL so a public
   # Let's Encrypt certificate can be issued for it (Caddy does the ACME work).
+  # Uses ZoneEdit Dynamic DNS when --dyn-token is given, else Google Cloud DNS.
   local ip zone_name record_name="$DOMAIN."
   [[ -n "$DOMAIN" ]] || return 0
   [[ "$SKIP_DNS" != true ]] || return 0
   ip="$(field 'networkInterfaces[0].accessConfigs[0].natIP')"
   [[ -n "$ip" ]] || die 'No external IP; cannot point the domain at the workstation'
+  zoneedit_update_dns "$ip" && return 0
   if [[ -z "$DNS_ZONE" ]]; then
     zone_name="$(find_zone_for_domain "$DOMAIN" | cut -d' ' -f1)"
     if [[ -z "$zone_name" ]]; then

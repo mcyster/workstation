@@ -54,6 +54,8 @@ jobs:
       DOMAIN: ${{ inputs.domain }}
       DNS_ZONE: ${{ inputs.dns_zone }}
       NO_DNS: ${{ inputs.no_dns }}
+      ZONEEDIT_DYN_USER: ${{ vars.ZONEEDIT_DYN_USER }}
+      ZONEEDIT_DYN_TOKEN: ${{ secrets.ZONEEDIT_DYN_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
@@ -177,6 +179,8 @@ jobs:
       DOMAIN: ${{ inputs.domain }}
       DNS_ZONE: ${{ inputs.dns_zone }}
       NO_DNS: ${{ inputs.no_dns }}
+      ZONEEDIT_DYN_USER: ${{ vars.ZONEEDIT_DYN_USER }}
+      ZONEEDIT_DYN_TOKEN: ${{ secrets.ZONEEDIT_DYN_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration

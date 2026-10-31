@@ -182,14 +182,24 @@ Caddy requests the certificate automatically. To make that work the CLI:
 
 The Google Cloud DNS zone for the hostname is auto-detected in the project; pass `--dns-zone ZONE` to name it explicitly, or `--no-dns` to manage DNS yourself (and create the A record manually). Port-8443/8444 links keep working alongside the public URL. The workstation still stores only the bcrypt hash; the plaintext password stays in Secret Manager, and the certificate is issued by Let's Encrypt to a domain you own.
 
-If your DNS provider has no API for the plan you use (for example ZoneEdit's free tier), give the workstation a **static IP** and set the A record once:
+If your DNS lives elsewhere — no Google Cloud DNS zone in the project, as with ZoneEdit — the CLI can update **ZoneEdit Dynamic DNS** with a per-domain token:
+
+```sh
+ZONEEDIT_DYN_USER=your-user \
+ZONEEDIT_DYN_TOKEN=your-dyn-token \
+scripts/workstation web-terminal main --domain main.workstation.cyster.com
+```
+
+The CLI calls `https://api.cp.zoneedit.com/dyn/generic.php` with the workstation's external IP. In ZoneEdit first: add a **Dynamic record** for host `main.workstation` (short TTL), then enable its **DYN Authentication Token** (the token is used as the password, your account password is never sent). The hostname needs to exist as a Dynamic record before updates take effect.
+
+Alternatively give the workstation a **static IP** and set the A record once — no API and no token needed, and the record stays valid across `stop`/`start` because the address no longer changes:
 
 ```sh
 scripts/workstation static-ip main                       # reserve and attach a fixed IP
 scripts/workstation web-terminal main --domain main.workstation.example.com --no-dns
 ```
 
-Create the A record in the provider's console pointing at the printed static IP; it stays valid across `stop`/`start` because the address no longer changes. `--no-dns` skips the CLI's record updates, and Caddy still obtains and renews the Let's Encrypt certificate through port 80.
+`--no-dns` skips the CLI's record updates; you create the A record once in the provider's console. In every case Caddy still obtains and renews the Let's Encrypt certificate through port 80.
 
 ## Provisioning and ownership
 
