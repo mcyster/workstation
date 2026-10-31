@@ -7,11 +7,11 @@ if ! command -v code-server >/dev/null; then
   curl -fsSL https://code-server.dev/install.sh | sh
 fi
 # code-server includes Node and argon2 in its installation tree.
-ROOT=/usr/lib/code-server
-if [[ ! -x "$ROOT/lib/node" ]]; then
-  ROOT="$(dirname "$(dirname "$(command -v code-server)")")"
+CODE_SERVER_ROOT=/usr/lib/code-server
+if [[ ! -x "$CODE_SERVER_ROOT/lib/node" ]]; then
+  CODE_SERVER_ROOT="$(dirname "$(dirname "$(command -v code-server)")")"
 fi
-HASH="$("$ROOT/lib/node" -e 'const a=require(process.argv[1]);a.hash(process.env.CODE_SERVER_PASSWORD,{type:a.argon2id}).then(h=>process.stdout.write(h))' "$ROOT/node_modules/argon2")"
+HASH="$("$CODE_SERVER_ROOT/lib/node" -e 'const a=require(process.argv[1]);a.hash(process.env.CODE_SERVER_PASSWORD,{type:a.argon2id}).then(h=>process.stdout.write(h))' "$CODE_SERVER_ROOT/node_modules/argon2")"
 sudo install -d -m 700 -o "$USER_NAME" -g "$USER_NAME" "$(dirname "$CONFIG")"
 printf 'bind-addr: 0.0.0.0:8443\nauth: password\nhashed-password: %s\ncert: true\ndisable-telemetry: true\n' "$HASH" | sudo tee "$CONFIG" >/dev/null
 sudo chown "$USER_NAME:$USER_NAME" "$CONFIG"
@@ -20,6 +20,11 @@ printf '[Unit]\nDescription=code-server\nAfter=network-online.target\n[Service]\
 sudo systemctl daemon-reload
 sudo systemctl enable --now code-server >/dev/null
 sudo systemctl restart code-server
-for _ in {1..20}; do curl -ksf https://localhost:8443 >/dev/null && exit 0; sleep 2; done
+attempt=0
+while (( attempt < 20 )); do
+  curl -ksf https://localhost:8443 >/dev/null && exit 0
+  sleep 2
+  attempt=$(( attempt + 1 ))
+done
 echo 'code-server failed to start' >&2
 exit 1

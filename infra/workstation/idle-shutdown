@@ -45,8 +45,8 @@ if ss -tnH state established | awk '{print $4}' | grep -Eq ':(22|8443)$'; then
 fi
 
 # Sustained background work (builds, installs, agents) keeps the box alive.
-load1=$(awk '{print $1}' /proc/loadavg | cut -d. -f1)
-if (( load1 >= "$(nproc)" )); then
+one_minute_load=$(awk '{print $1}' /proc/loadavg | cut -d. -f1)
+if (( one_minute_load >= "$(nproc)" )); then
   printf '%s\n' "$now" > "$STATE_FILE"
   exit 1
 fi

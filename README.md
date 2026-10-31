@@ -22,3 +22,9 @@ scripts/workstation destroy main
 ## Setup
 
 The current hosting implementation requires a Google Cloud project. You can reuse an existing project or create one with a unique Project ID such as `mcyster-dev`. Follow the [Google Cloud project setup](docs/workstation.md#google-cloud-project-setup) to bootstrap a workstation entirely from your browser.
+
+## Development
+
+Repository conventions and required checks are in
+[docs/coding-standards.md](docs/coding-standards.md). Detailed operations
+documentation lives in [docs/](docs/).
