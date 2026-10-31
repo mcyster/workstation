@@ -61,12 +61,28 @@ Apply these in order (from tog's principles):
 
 ## Change discipline
 
-- Make changes on a branch and deliver them through a pull request; do not
-  commit directly to the default branch.
+The intent: every change lands through review, stays within its own scope, and
+removes what it supersedes, so the default branch keeps a coherent history and
+no speculative or dead machinery accumulates. Rules from tog:
+
+- Make repository changes in a linked git worktree on a branch and submit them
+  through a pull request. Do not commit directly to the default branch.
 - Make the smallest complete change that satisfies the requirement.
+- Treat exploratory ideas and future possibilities as non-requirements until
+  they are explicitly accepted.
+- Do not add speculative compatibility, configuration, abstractions, or
+  extension points.
+- When feedback changes ownership, lifetime, output hierarchy, or failure
+  semantics, restate the complete boundary and remove invalid abstractions
+  instead of layering another type onto them.
+- When a simpler accepted direction gives up an earlier property, remove the
+  superseded code, tests, and documentation rather than preserving it
+  implicitly.
 - Preserve existing behavior unless the task explicitly changes it.
-- When a change makes an earlier property moot, remove the superseded code and
-  documentation rather than preserving it.
+- Add or update tests for observable behavior and validation rules.
+- Deliver every change through a pull request: commit, push, and create one, or
+  update the current open pull request. Check that an existing pull request is
+  not already merged before updating it.
 
 ## Required checks
 
