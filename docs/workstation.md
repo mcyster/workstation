@@ -70,7 +70,7 @@ After the workflow succeeds, open its summary. The summary shows the browser URL
 
 ## GitHub workflow
 
-Use **Actions → Workstation → Run workflow** to run `configure`, `start`, `stop`, `web-terminal`, `list`, or `destroy` after setup. `web-terminal` sets up browser access or issues a new password. The summary links to Secret Manager but never prints the password.
+Use **Actions → Workstation → Run workflow** to run `configure`, `start`, `stop`, `web-terminal`, `list`, or `destroy` after setup. `web-terminal` sets up browser access or issues a new password. The summary links to Secret Manager but never prints the password. The **environment** field accepts a comma-separated list (for example `tog, devbase`); each is applied in order, and each runs against its own GitHub Environment.
 
 ## Local CLI
 
@@ -86,7 +86,7 @@ The included Nix development shell provides `gcloud` and adds `scripts/` to `PAT
 
 ```sh
 scripts/workstation create main --machine-type e2-standard-2 --web-terminal
-scripts/workstation configure main --environment tog
+scripts/workstation configure main --environment "tog, devbase"
 scripts/workstation list
 scripts/workstation shell main
 scripts/workstation config-ssh main
@@ -125,6 +125,8 @@ Each directive must contain one GitHub secret name, with up to 16 secrets per en
 The script runs as `developer` with `HOME=/home/developer`. It also receives `WORKSTATION_NAME` and `WORKSTATION_ENVIRONMENT`. Make the script idempotent so it can be applied repeatedly.
 
 Create a GitHub Environment with the same name and add the declared secrets to it. Then select that environment when running `create` or `configure` in GitHub Actions. `create` provisions the workstation before applying the environment. `configure` reapplies it to an existing running workstation.
+
+Pass multiple environments as a comma-separated list, either in the workflow's **environment** field or to `--environment` on the CLI. Environments are applied in the order given and each environment's script runs with `WORKSTATION_ENVIRONMENT` set to its own name. GitHub Actions runs one configure job per environment (a matrix), with each job bound to that environment's GitHub Environment so its secrets stay scoped. Duplicates are ignored.
 
 The local CLI reads declared secrets from its current environment:
 
