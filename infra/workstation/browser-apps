@@ -92,15 +92,9 @@ install_opencode() {
   if [[ ! -x "$DEV_HOME/.opencode/bin/opencode" ]]; then
     sudo -u "$DEV_USER" bash -lc 'curl -fsSL https://opencode.ai/v2/install | bash' >/dev/null
   fi
-  # opencode always demands its own login; with OPENCODE_SERVER_PASSWORD unset it
-  # auto-generates a random password nobody knows. Sync it to the shared browser
-  # password (root-only file) whenever the installer is given one.
-  if [[ -n "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
-    install -d -m 0755 "$WORKSTATION_DIR"
-    umask 077
-    printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$OPENCODE_SERVER_PASSWORD" > "$WORKSTATION_DIR/opencode.env"
-    chmod 600 "$WORKSTATION_DIR/opencode.env"
-  fi
+  # opencode runs without a server password (it auto-generates one nobody needs
+  # to know, since the browser signs in via a one-time pairing link). Keeps no
+  # plaintext secret on disk: Caddy's bcrypt hash is the only password at rest.
   cat > /etc/systemd/system/opencode-web.service <<UNIT
 [Unit]
 Description=opencode web server
@@ -110,7 +104,6 @@ After=network-online.target
 User=$DEV_USER
 WorkingDirectory=$DEV_HOME
 Environment=HOME=$DEV_HOME
-EnvironmentFile=$WORKSTATION_DIR/opencode.env
 ExecStart=$DEV_HOME/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096
 Restart=on-failure
 

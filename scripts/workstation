@@ -326,7 +326,7 @@ enable_browser_app() {
   fi
   if [[ -n "$password" ]]; then
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APPS_PASSWORD='$password' OPENCODE_SERVER_PASSWORD='$password' BROWSER_APPS_DOMAIN='$DOMAIN' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APPS_PASSWORD='$password' BROWSER_APPS_DOMAIN='$DOMAIN' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   else
     # Reuse the existing bcrypt hash; just make sure the app is behind Caddy.
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
