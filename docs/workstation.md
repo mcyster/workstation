@@ -166,6 +166,22 @@ Browse to either URL and accept the self-signed certificate warning. Both apps r
 
 `start` rotates the password after a stopped VM resumes; `web-terminal` and `opencode` rotate it on demand. `create` without those flags keeps both ports closed. Browser access is public on ports 8443 and 8444 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
 
+### Public certificate via a domain (optional)
+
+Pass `--domain HOSTNAME` to any browser-access command to use a real, public Let's Encrypt certificate instead of the self-signed one:
+
+```sh
+scripts/workstation web-terminal main --domain main.workstation.example.com
+scripts/workstation opencode main --domain main.workstation.example.com
+```
+
+Caddy requests the certificate automatically. To make that work the CLI:
+
+- creates or updates an **A record** for `HOSTNAME` pointing at the workstation's external IP with a **60-second TTL**, and
+- opens firewall ports **80** (ACME challenge) and **443** (HTTPS).
+
+The Google Cloud DNS zone for the hostname is auto-detected in the project; pass `--dns-zone ZONE` to name it explicitly, or `--no-dns` to manage DNS yourself (and create the A record manually). Port-8443/8444 links keep working alongside the public URL. The workstation still stores only the bcrypt hash; the plaintext password stays in Secret Manager, and the certificate is issued by Let's Encrypt to a domain you own.
+
 ## Provisioning and ownership
 
 - `scripts/workstation`: instance lifecycle, firewall, SSH, and password rotation.

@@ -13,14 +13,21 @@ ENVIRONMENTS=()
 WEB=false
 OPENCODE=false
 YES=false
+DOMAIN=""
+DNS_ZONE=""
+SKIP_DNS=false
 ACTION=""
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation create [NAME] [--machine-type TYPE] [--web-terminal|--opencode] [--environment NAME[,NAME...]]
        workstation configure [NAME] --environment NAME[,NAME...]
+       workstation web-terminal|opencode [NAME] [--domain HOST] [--dns-zone ZONE] [--no-dns]
 Commands: create, configure, idle-shutdown, opencode, start, stop, list, shell, config-ssh, web-terminal, destroy
 web-terminal enables the code-server browser editor; opencode enables the opencode web UI.
 Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps password.
+--domain points HOST at the workstation (short-TTL DNS record, firewall 80/443) and requests a
+public Let's Encrypt certificate through Caddy; without it Caddy uses a self-signed cert.
+--dns-zone names the Google Cloud DNS zone; --no-dns skips DNS record creation.
 configure applies one or more environments (comma-separated) from environments/NAME.sh, in order.
 idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
@@ -36,6 +43,11 @@ while (($#)); do
    --zone=*) ZONE="${1#*=}"; shift;;
    --machine-type=*) MACHINE_TYPE="${1#*=}"; shift;;
    --environment=*) ENVIRONMENT="${1#*=}"; shift;;
+   --domain) (($#>=2)) || die "Missing value for $1"; DOMAIN="$2"; shift 2;;
+   --domain=*) DOMAIN="${1#*=}"; shift;;
+   --dns-zone) (($#>=2)) || die "Missing value for $1"; DNS_ZONE="$2"; shift 2;;
+   --dns-zone=*) DNS_ZONE="${1#*=}"; shift;;
+   --no-dns) SKIP_DNS=true; shift;;
    --web-terminal) WEB=true; shift;;
    --opencode) OPENCODE=true; shift;;
    --yes) YES=true; shift;;
@@ -65,6 +77,9 @@ if [[ -n "$ENVIRONMENT" ]]; then
   ENVIRONMENTS=("${filtered[@]}")
 fi
 [[ "$ACTION" != configure || -n "${ENVIRONMENTS[*]}" ]] || die 'configure requires --environment'
+if [[ -n "$DOMAIN" ]]; then
+  [[ "$DOMAIN" =~ ^([a-z0-9](-?[a-z0-9])*\.)+[a-z0-9](-?[a-z0-9])*$ ]] || die "Invalid domain: $DOMAIN"
+fi
 command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
@@ -183,6 +198,57 @@ store_browser_apps_password() {
     die 'Password changed on VM but not saved in Secret Manager. Run web-terminal or opencode again.'
   fi
 }
+find_zone_for_domain() {
+  local hostname="$1" entry zone_name zone_dns longest=-1 best_name="" best_dns=""
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    zone_name="${entry%% *}"
+    zone_dns="${entry#* }"
+    [[ -n "$zone_dns" ]] || continue
+    if [[ "$hostname." == *"$zone_dns" ]] && (( ${#zone_dns} > longest )); then
+      longest=${#zone_dns}
+      best_name="$zone_name"
+      best_dns="$zone_dns"
+    fi
+  done < <(gcloud dns managed-zones list --project "$PROJECT" --format='value(name,dnsName)' 2>/dev/null)
+  printf '%s %s\n' "$best_name" "$best_dns"
+}
+ensure_domain_dns() {
+  # Point DOMAIN at the workstation's external IP with a short TTL so a public
+  # Let's Encrypt certificate can be issued for it (Caddy does the ACME work).
+  local ip zone_name record_name="$DOMAIN."
+  [[ -n "$DOMAIN" ]] || return 0
+  [[ "$SKIP_DNS" != true ]] || return 0
+  ip="$(field 'networkInterfaces[0].accessConfigs[0].natIP')"
+  [[ -n "$ip" ]] || die 'No external IP; cannot point the domain at the workstation'
+  if [[ -z "$DNS_ZONE" ]]; then
+    zone_name="$(find_zone_for_domain "$DOMAIN" | cut -d' ' -f1)"
+    if [[ -z "$zone_name" ]]; then
+      echo "workstation: no Google Cloud DNS zone for $DOMAIN in project $PROJECT" >&2
+      echo "workstation: add an A record $DOMAIN -> $ip, or use --dns-zone ZONE, or --no-dns to manage DNS yourself" >&2
+      return 1
+    fi
+  else
+    zone_name="$DNS_ZONE"
+  fi
+  if gcloud dns record-sets describe "$record_name" --zone "$zone_name" --type A --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud dns record-sets update "$record_name" --zone "$zone_name" --type A --ttl 60 --rrdatas "$ip" --project "$PROJECT" >/dev/null
+  else
+    gcloud dns record-sets create "$record_name" --zone "$zone_name" --type A --ttl 60 --rrdatas "$ip" --project "$PROJECT" >/dev/null
+  fi
+  echo "domain: $DOMAIN -> $ip (TTL 60s)"
+}
+ensure_domain_firewall() {
+  local domain_tag=workstation-domain
+  [[ -n "$DOMAIN" ]] || return 0
+  if [[ "$(field 'tags.items')" != *"$domain_tag"* ]]; then
+    gcloud compute instances add-tags "$INSTANCE" "${GCLOUD_ARGS[@]}" --tags "$domain_tag" >/dev/null
+  fi
+  if ! gcloud compute firewall-rules describe "$domain_tag" --project "$PROJECT" >/dev/null 2>&1; then
+    # Port 80 carries the ACME HTTP-01 challenge; 443 serves the apps over HTTPS.
+    gcloud compute firewall-rules create "$domain_tag" --project "$PROJECT" --allow tcp:80,tcp:443 --target-tags "$domain_tag" >/dev/null
+  fi
+}
 enable_browser_app() {
   # enable_browser_app APP [ROTATE] [PASSWORD]
   # ROTATE=true or a new workstation forces a fresh password. An explicit
@@ -199,6 +265,10 @@ enable_browser_app() {
   if ! gcloud compute firewall-rules describe "$tag" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud compute firewall-rules create "$tag" --project "$PROJECT" --allow "tcp:$port" --target-tags "$tag" >/dev/null
   fi
+  if [[ -n "$DOMAIN" ]]; then
+    ensure_domain_dns
+    ensure_domain_firewall
+  fi
   if [[ -z "$password" ]]; then
     if [[ "$rotate_mode" == true ]] || ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
       password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
@@ -207,11 +277,11 @@ enable_browser_app() {
   fi
   if [[ -n "$password" ]]; then
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APPS_PASSWORD='$password' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APPS_PASSWORD='$password' BROWSER_APPS_DOMAIN='$DOMAIN' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   else
     # Reuse the existing bcrypt hash; just make sure the app is behind Caddy.
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APPS_DOMAIN='$DOMAIN' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   fi
   if [[ "$generated_value" == true ]]; then
     store_browser_apps_password "$password"

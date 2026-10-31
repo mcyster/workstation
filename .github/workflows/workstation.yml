@@ -23,6 +23,18 @@ on:
         description: Comma-separated environments from environments/NAME.sh to configure, in order
         type: string
         required: false
+      domain:
+        description: Optional hostname for a public Let's Encrypt certificate (adds a short-TTL A record, opens 80/443)
+        type: string
+        required: false
+      dns_zone:
+        description: Google Cloud DNS zone used when creating the --domain A record
+        type: string
+        required: false
+      no_dns:
+        description: Skip DNS record creation; manage DNS yourself
+        type: boolean
+        default: false
 permissions:
   id-token: write
   contents: read
@@ -39,6 +51,9 @@ jobs:
       MACHINE_TYPE: ${{ inputs.machine_type }}
       WEB_TERMINAL: ${{ inputs.web_terminal }}
       ENVIRONMENT: ${{ inputs.environment }}
+      DOMAIN: ${{ inputs.domain }}
+      DNS_ZONE: ${{ inputs.dns_zone }}
+      NO_DNS: ${{ inputs.no_dns }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
@@ -60,6 +75,9 @@ jobs:
             echo "environment: $ENVIRONMENT" > output.txt
           else
             args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
+            if [[ -n "$DOMAIN" ]]; then args+=(--domain "$DOMAIN"); fi
+            if [[ -n "$DNS_ZONE" ]]; then args+=(--dns-zone "$DNS_ZONE"); fi
+            if [[ "$NO_DNS" == true ]]; then args+=(--no-dns); fi
             if [[ "$ACTION" == create ]]; then
               args+=(--machine-type "$MACHINE_TYPE")
               [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
@@ -156,6 +174,9 @@ jobs:
       SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
       NAME: ${{ inputs.name }}
       ENVIRONMENT: ${{ matrix.environment }}
+      DOMAIN: ${{ inputs.domain }}
+      DNS_ZONE: ${{ inputs.dns_zone }}
+      NO_DNS: ${{ inputs.no_dns }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
@@ -217,7 +238,10 @@ jobs:
           bash scripts/workstation configure "$NAME" \
             --project "$PROJECT" \
             --zone "$ZONE" \
-            --environment "$ENVIRONMENT" > output.txt
+            --environment "$ENVIRONMENT" \
+            ${DOMAIN:+--domain "$DOMAIN"} \
+            ${DNS_ZONE:+--dns-zone "$DNS_ZONE"} \
+            ${NO_DNS:+--no-dns} > output.txt
           {
             echo "## Environment $ENVIRONMENT"
             echo "- Workstation: $NAME"

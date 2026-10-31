@@ -131,6 +131,17 @@ generate_caddyfile() {
           echo '  }'
           echo '  reverse_proxy 127.0.0.1:8080'
           echo '}'
+          if [[ -n "${BROWSER_APPS_DOMAIN:-}" ]]; then
+            echo
+            echo "# web terminal (public cert)"
+            echo "$BROWSER_APPS_DOMAIN {"
+            echo '  basic_auth {'
+            # shellcheck disable=SC2016
+            echo '    workstation {$BROWSER_APPS_PASSWORD_HASH}'
+            echo '  }'
+            echo '  reverse_proxy 127.0.0.1:8080'
+            echo '}'
+          fi
           ;;
         opencode)
           echo
@@ -143,6 +154,18 @@ generate_caddyfile() {
           echo '  }'
           echo '  reverse_proxy 127.0.0.1:4096'
           echo '}'
+          if [[ -n "${BROWSER_APPS_DOMAIN:-}" ]]; then
+            echo
+            echo "# opencode web (public cert)"
+            echo "$BROWSER_APPS_DOMAIN:8444 {"
+            echo '  tls'
+            echo '  basic_auth {'
+            # shellcheck disable=SC2016
+            echo '    workstation {$BROWSER_APPS_PASSWORD_HASH}'
+            echo '  }'
+            echo '  reverse_proxy 127.0.0.1:4096'
+            echo '}'
+          fi
           ;;
       esac
     done < "$APP_LIST_FILE"
