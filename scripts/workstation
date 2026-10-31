@@ -216,10 +216,11 @@ enable_browser_app() {
   # ROTATE=true or a new workstation forces a fresh password. An explicit
   # PASSWORD is used for all apps in one rotation; the caller stores it.
   local app="$1" rotate_mode="${2:-false}" password="${3:-}"
-  local generated_value=false
+  local port generated_value=false
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
   ensure_browser_app_tag "$app"
+  port="$(browser_app_port "$app")"
   if [[ -z "$password" ]]; then
     if [[ "$rotate_mode" == true ]] || ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
       password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
