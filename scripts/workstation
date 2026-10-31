@@ -277,6 +277,18 @@ ensure_domain_firewall() {
     gcloud compute firewall-rules create "$domain_tag" --project "$PROJECT" --allow tcp:80,tcp:443 --target-tags "$domain_tag" >/dev/null
   fi
 }
+ensure_browser_app_tag() {
+  # Idempotently expose a browser app's port through tags and a firewall rule.
+  local app="$1" tag port
+  tag="$(browser_app_tag "$app")"
+  port="$(browser_app_port "$app")"
+  if [[ "$(field 'tags.items')" != *"$tag"* ]]; then
+    gcloud compute instances add-tags "$INSTANCE" "${GCLOUD_ARGS[@]}" --tags "$tag" >/dev/null
+  fi
+  if ! gcloud compute firewall-rules describe "$tag" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud compute firewall-rules create "$tag" --project "$PROJECT" --allow "tcp:$port" --target-tags "$tag" >/dev/null
+  fi
+}
 enable_browser_app() {
   # enable_browser_app APP [ROTATE] [PASSWORD]
   # ROTATE=true or a new workstation forces a fresh password. An explicit
@@ -287,12 +299,7 @@ enable_browser_app() {
   ensure_setup
   tag="$(browser_app_tag "$app")"
   port="$(browser_app_port "$app")"
-  if [[ "$(field 'tags.items')" != *"$tag"* ]]; then
-    gcloud compute instances add-tags "$INSTANCE" "${GCLOUD_ARGS[@]}" --tags "$tag" >/dev/null
-  fi
-  if ! gcloud compute firewall-rules describe "$tag" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud compute firewall-rules create "$tag" --project "$PROJECT" --allow "tcp:$port" --target-tags "$tag" >/dev/null
-  fi
+  ensure_browser_app_tag "$app"
   if [[ -n "$DOMAIN" ]]; then
     ensure_domain_dns
     ensure_domain_firewall
@@ -394,8 +401,8 @@ case "$ACTION" in
  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
  static-ip) static_ip;;
- web-terminal) rotate web-terminal;;
- opencode) rotate opencode;;
+ web-terminal) ensure_browser_app_tag web-terminal; rotate;;
+ opencode) ensure_browser_app_tag opencode; rotate;;
   list)
     gcloud compute instances list --project "$PROJECT" --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP,tags.items,labels.managed-workstation)' |
       while IFS=, read -r instance state machine zone ip tags managed; do

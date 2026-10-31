@@ -37,6 +37,7 @@ install_caddy() {
     chmod +x "$CADDY_BIN"
   fi
   if ! command -v htpasswd >/dev/null; then
+    apt-get update >/dev/null
     apt-get install -y --no-install-recommends apache2-utils >/dev/null
   fi
 }
