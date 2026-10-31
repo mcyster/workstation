@@ -155,9 +155,24 @@ configure_environment() {
       apps+=("$app")
     done < <(sed -nE 's/^#[[:space:]]+workstation-app:[[:space:]]+([a-z-]+)[[:space:]]*$/\1/p' "$script" | sort -u)
   done
+
+  # Already-installed apps reuse the current password; apps being enabled for
+  # the first time join a single tagged-set rotation so every app keeps the
+  # same shared password.
+  local app new_apps=()
   for app in "${apps[@]}"; do
-    enable_browser_app "$app"
+    if [[ "$(field 'tags.items')" == *"$(browser_app_tag "$app")"* ]]; then
+      enable_browser_app "$app"
+    else
+      new_apps+=("$app")
+    fi
   done
+  if ((${#new_apps[@]})); then
+    for app in "${new_apps[@]}"; do
+      ensure_browser_app_tag "$app"
+    done
+    rotate
+  fi
 }
 browser_app_tag() {
   case "$1" in
@@ -183,14 +198,9 @@ store_browser_apps_password() {
     die 'Password changed on VM but not saved in Secret Manager. Run web-terminal or opencode again.'
   fi
 }
-enable_browser_app() {
-  # enable_browser_app APP [ROTATE] [PASSWORD]
-  # ROTATE=true or a new workstation forces a fresh password. An explicit
-  # PASSWORD is used for all apps in one rotation; the caller stores it.
-  local app="$1" rotate_mode="${2:-false}" password="${3:-}"
-  local tag port generated_value=false
-  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
-  ensure_setup
+ensure_browser_app_tag() {
+  # Idempotently expose a browser app's port through tags and a firewall rule.
+  local app="$1" tag port
   tag="$(browser_app_tag "$app")"
   port="$(browser_app_port "$app")"
   if [[ "$(field 'tags.items')" != *"$tag"* ]]; then
@@ -199,6 +209,16 @@ enable_browser_app() {
   if ! gcloud compute firewall-rules describe "$tag" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud compute firewall-rules create "$tag" --project "$PROJECT" --allow "tcp:$port" --target-tags "$tag" >/dev/null
   fi
+}
+enable_browser_app() {
+  # enable_browser_app APP [ROTATE] [PASSWORD]
+  # ROTATE=true or a new workstation forces a fresh password. An explicit
+  # PASSWORD is used for all apps in one rotation; the caller stores it.
+  local app="$1" rotate_mode="${2:-false}" password="${3:-}"
+  local generated_value=false
+  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+  ensure_setup
+  ensure_browser_app_tag "$app"
   if [[ -z "$password" ]]; then
     if [[ "$rotate_mode" == true ]] || ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
       password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
@@ -278,8 +298,8 @@ case "$ACTION" in
  stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
- web-terminal) rotate web-terminal;;
- opencode) rotate opencode;;
+ web-terminal) ensure_browser_app_tag web-terminal; rotate;;
+ opencode) ensure_browser_app_tag opencode; rotate;;
   list)
     gcloud compute instances list --project "$PROJECT" --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP,tags.items,labels.managed-workstation)' |
       while IFS=, read -r instance state machine zone ip tags managed; do
