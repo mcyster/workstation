@@ -70,7 +70,7 @@ After the workflow succeeds, open its summary. The summary shows the browser URL
 
 ## GitHub workflow
 
-Use **Actions → Workstation → Run workflow** to run `configure`, `start`, `stop`, `web-terminal`, `list`, or `destroy` after setup. `web-terminal` sets up browser access or issues a new password. The summary links to Secret Manager but never prints the password. The **environment** field accepts a comma-separated list (for example `tog, devbase`); each is applied in order, and each runs against its own GitHub Environment.
+Use **Actions → Workstation → Run workflow** to run `configure`, `start`, `stop`, `web-terminal`, `opencode`, `list`, or `destroy` after setup. `web-terminal` and `opencode` set up or repassword browser access. The summary links to Secret Manager but never prints the password. The **environment** field accepts a comma-separated list (for example `tog, devbase`); each is applied in order, and each runs against its own GitHub Environment.
 
 ## Local CLI
 
@@ -122,6 +122,15 @@ set -euo pipefail
 
 Each directive must contain one GitHub secret name, with up to 16 secrets per environment. The workflow exports only the declared values while the script runs. It does not write them to disk or include them in command arguments. The script decides whether and how a tool should persist its credentials.
 
+Declare which browser apps the project needs at the top of the script, one per line:
+
+```bash
+# workstation-app: web-terminal
+# workstation-app: opencode
+```
+
+Applying the environment enables each declared browser app behind Caddy ([Browser access](#browser-access)) using the workstation's shared browser-apps password. `tog` declares `opencode`, so a tog-configured workstation gets the OpenCode web UI without extra flags.
+
 The script runs as `developer` with `HOME=/home/developer`. It also receives `WORKSTATION_NAME` and `WORKSTATION_ENVIRONMENT`. Make the script idempotent so it can be applied repeatedly.
 
 Create a GitHub Environment with the same name and add the declared secrets to it. Then select that environment when running `create` or `configure` in GitHub Actions. `create` provisions the workstation before applying the environment. `configure` reapplies it to an existing running workstation.
@@ -139,15 +148,30 @@ Environment scripts are trusted code with access to the secrets they declare. Pr
 
 ## Browser access
 
-`create --web-terminal` provisions code-server (browser-based editor and shell) with a random password. Browse to `https://EXTERNAL_IP:8443` and accept the self-signed certificate warning. The workstation holds only an Argon2 password hash. The plaintext password is added to the Google Cloud Secret Manager secret `workstation-NAME-web-terminal-password`. The workflow identity can create these secrets and append versions, but cannot read their values. Use Secret Manager in the Google Cloud console to see the active password.
+Browser apps are served through **Caddy**, which terminates TLS (self-signed) and requires HTTP basic auth with a single shared browser-apps password:
 
-Run `web-terminal` to set up browser access or issue a new password. `start` rotates the password after a stopped VM resumes. `create` without the flag leaves port 8443 closed. Browser access is public on port 8443 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
+- **Web terminal** — code-server on `https://EXTERNAL_IP:8443`
+- **OpenCode** — the opencode web UI on `https://EXTERNAL_IP:8444`
+
+Enable them with `web-terminal` or `opencode`, or when creating:
+
+```sh
+scripts/workstation create main --web-terminal
+scripts/workstation create main --opencode
+scripts/workstation web-terminal main
+scripts/workstation opencode main
+```
+
+Browse to either URL and accept the self-signed certificate warning. Both apps run plain on localhost; Caddy terminates TLS and authenticates the browser, so the workstation stores only a bcrypt hash of the password. The plaintext password is kept in the Google Cloud Secret Manager secret `workstation-NAME-web-terminal-password`. The workflow identity can create this secret and append versions, but cannot read its values. Use Secret Manager in the Google Cloud console to see the active password.
+
+`start` rotates the password after a stopped VM resumes; `web-terminal` and `opencode` rotate it on demand. `create` without those flags keeps both ports closed. Browser access is public on ports 8443 and 8444 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
 
 ## Provisioning and ownership
 
 - `scripts/workstation`: instance lifecycle, firewall, SSH, and password rotation.
 - `infra/workstation/setup`: idempotent first-boot host provisioning, attached as a GCE startup script.
-- `infra/workstation/web-terminal`: code-server service and password hash updates.
+- `infra/workstation/browser-apps`: Caddy TLS terminator, per-app systemd services, and bcrypt password hashing.
+- `infra/workstation/idle-shutdown`: auto-shutdown watchdog installed on every managed workstation.
 - `infra/workstation/github-gcloud-identity`: workload identity, service account, and Secret Manager setup.
 - `.github/workflows/workstation.yml`: manual action, using Workload Identity Federation.
 
@@ -164,7 +188,7 @@ scripts/workstation idle-shutdown main
 A workstation counts as **in use** while any of these hold:
 
 - an active SSH connection (port 22),
-- an active code-server web terminal connection (port 8443),
+- an active web terminal or OpenCode browser connection (ports 8443 and 8444),
 - sustained CPU load at or above the vCPU count (long builds and agent jobs).
 
 When none of these hold for `WORKSTATION_IDLE_HOURS` (default 4) it runs a graceful `systemctl poweroff`, which stops the VM the same way `stop` does: the disk is preserved and `start` resumes it. Checking starts only 15 minutes after boot (`WORKSTATION_BOOT_GRACE_MIN`) so provisioning and updates finish first.

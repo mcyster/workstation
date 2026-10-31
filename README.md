@@ -13,6 +13,7 @@ Or use the command line:
 ```sh
 scripts/workstation create main --web-terminal
 scripts/workstation shell main
+scripts/workstation opencode main
 scripts/workstation idle-shutdown main
 scripts/workstation stop main
 scripts/workstation start main

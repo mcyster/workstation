@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # workstation-secret: OPENROUTER_API_KEY
+# workstation-app: opencode
 
 set -euo pipefail
 
