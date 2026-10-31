@@ -18,9 +18,10 @@ usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation create [NAME] [--machine-type TYPE] [--web-terminal|--opencode] [--environment NAME[,NAME...]]
        workstation configure [NAME] --environment NAME[,NAME...]
-Commands: create, configure, idle-shutdown, opencode, start, stop, list, shell, config-ssh, web-terminal, destroy
+Commands: create, configure, idle-shutdown, opencode, opencode-link, start, stop, list, shell, config-ssh, web-terminal, destroy
 web-terminal enables the code-server browser editor; opencode enables the opencode web UI.
 Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps password.
+opencode-link prints a one-time pairing link that signs the browser into opencode web.
 configure applies one or more environments (comma-separated) from environments/NAME.sh, in order.
 idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
@@ -39,7 +40,7 @@ while (($#)); do
    --web-terminal) WEB=true; shift;;
    --opencode) OPENCODE=true; shift;;
    --yes) YES=true; shift;;
-   create|configure|idle-shutdown|opencode|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   create|configure|idle-shutdown|opencode|opencode-link|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
    *) NAME="$1"; shift;;
  esac
@@ -299,7 +300,18 @@ case "$ACTION" in
  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
  web-terminal) ensure_browser_app_tag web-terminal; rotate;;
- opencode) ensure_browser_app_tag opencode; rotate;;
+  opencode) ensure_browser_app_tag opencode; rotate;;
+  opencode-link)
+    [[ "$(status)" == RUNNING ]] || die 'Workstation not running'
+    ensure_setup
+    ip="$(field 'networkInterfaces[0].accessConfigs[0].natIP')"
+    [[ -n "$ip" ]] || die 'No external IP'
+    link="$(gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
+      --command "timeout 20 sudo -u developer /home/developer/.opencode/bin/opencode pair --url https://$ip:8444" 2>/dev/null |
+      grep -oE "https://$ip:8444/auth/connect/[A-Za-z0-9_-]+" | head -1)"
+    [[ -n "$link" ]] || die 'Could not generate an opencode pairing link (is opencode running?)'
+    echo "opencode link: $link (one-time, expires in 5 minutes)"
+    ;;
   list)
     gcloud compute instances list --project "$PROJECT" --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP,tags.items,labels.managed-workstation)' |
       while IFS=, read -r instance state machine zone ip tags managed; do
