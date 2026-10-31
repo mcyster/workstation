@@ -318,6 +318,9 @@ enable_browser_app() {
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
       --command "sudo BROWSER_APPS_DOMAIN='$DOMAIN' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   fi
+  if ! gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /etc/workstation/browser-apps' >/dev/null 2>&1; then
+    die 'Browser app install did not complete on the workstation'
+  fi
   if [[ "$generated_value" == true ]]; then
     store_browser_apps_password "$password"
   fi

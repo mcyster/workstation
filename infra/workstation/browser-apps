@@ -112,8 +112,25 @@ UNIT
   systemctl restart opencode-web
 }
 
+ensure_self_signed_cert() {
+  # Caddy cannot serve TLS on a hostless site (e.g. :8443) with 'tls internal'
+  # because there is no hostname to issue a certificate for. Provide an
+  # explicit self-signed cert so IP-based browsing works (browser warning
+  # expected); ACME domain sites use their own automatic certificates.
+  local certificate="$CADDY_DIR/internal.crt" private_key="$CADDY_DIR/internal.key"
+  if [[ -f "$certificate" && -f "$private_key" ]]; then
+    return 0
+  fi
+  install -d -m 0700 "$CADDY_DIR"
+  openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 3650 \
+    -subj "/CN=workstation" \
+    -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+    -keyout "$private_key" -out "$certificate" >/dev/null 2>&1
+  chmod 600 "$private_key"
+}
+
 generate_caddyfile() {
-  local app
+  local app server_tls="  tls $CADDY_DIR/internal.crt $CADDY_DIR/internal.key"
   install -d -m 0755 "$CADDY_DIR"
   {
     echo '{'
@@ -125,7 +142,7 @@ generate_caddyfile() {
           echo
           echo '# web terminal'
           echo ':8443 {'
-          echo '  tls internal'
+          echo "  $server_tls"
           echo '  basic_auth {'
           # shellcheck disable=SC2016
           echo '    workstation {$BROWSER_APPS_PASSWORD_HASH}'
@@ -148,7 +165,7 @@ generate_caddyfile() {
           echo
           echo '# opencode web'
           echo ':8444 {'
-          echo '  tls internal'
+          echo "  $server_tls"
           echo '  basic_auth {'
           # shellcheck disable=SC2016
           echo '    workstation {$BROWSER_APPS_PASSWORD_HASH}'
@@ -205,11 +222,12 @@ main() {
   esac
   ensure_app_listed
   write_password_hash
+  ensure_self_signed_cert
   generate_caddyfile
   start_caddy
   echo "browser-apps: $APP_NAME enabled behind Caddy"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
 fi
