@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# Enable a browser app behind the Caddy TLS terminator.
+#
+# Apps: web-terminal (code-server on :8443) and opencode (opencode web on
+# :8444). Caddy terminates TLS (self-signed, tls internal) and requires HTTP
+# basic auth backed by a bcrypt password hash. The workstation stores only the
+# hash; the plaintext lives in Secret Manager and is passed transiently in
+# BROWSER_APPS_PASSWORD. Leave that variable unset to keep the existing hash.
+#
+# Usage (as root on the workstation):
+#   BROWSER_APPS_PASSWORD=... ./browser-apps web-terminal
+#   BROWSER_APPS_PASSWORD=... ./browser-apps opencode
+set -euo pipefail
+
+APP_NAME="${1:-}"
+DEV_USER=developer
+DEV_HOME=/home/developer
+WORKSTATION_DIR=/etc/workstation
+APP_LIST_FILE=$WORKSTATION_DIR/browser-apps
+PASSWORD_ENV_FILE=$WORKSTATION_DIR/browser-apps.env
+CADDY_BIN=/usr/local/bin/caddy
+CADDY_DIR=/etc/caddy
+CADDY_CFG=$CADDY_DIR/Caddyfile
+
+die() { echo "browser-apps: $*" >&2; exit 1; }
+[[ -n "$APP_NAME" ]] || die "usage: browser-apps web-terminal|opencode"
+
+install_caddy() {
+  local caddy_arch
+  case "$(uname -m)" in
+    x86_64)  caddy_arch=amd64 ;;
+    aarch64) caddy_arch=arm64 ;;
+    *)       die "Unsupported architecture: $(uname -m)" ;;
+  esac
+  if [[ ! -x "$CADDY_BIN" ]]; then
+    curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=$caddy_arch" -o "$CADDY_BIN"
+    chmod +x "$CADDY_BIN"
+  fi
+  if ! command -v htpasswd >/dev/null; then
+    apt-get install -y --no-install-recommends apache2-utils >/dev/null
+  fi
+}
+
+write_password_hash() {
+  local hash
+  [[ -n "${BROWSER_APPS_PASSWORD:-}" ]] || return 0
+  install -d -m 0755 "$WORKSTATION_DIR"
+  hash="$(htpasswd -bnBC 12 "" "$BROWSER_APPS_PASSWORD" | tr -d ':\n')"
+  umask 077
+  printf 'BROWSER_APPS_PASSWORD_HASH=%s\n' "$hash" > "$PASSWORD_ENV_FILE"
+  chmod 600 "$PASSWORD_ENV_FILE"
+}
+
+ensure_app_listed() {
+  install -d -m 0755 "$WORKSTATION_DIR"
+  touch "$APP_LIST_FILE"
+  if ! grep -qx "$APP_NAME" "$APP_LIST_FILE"; then
+    printf '%s\n' "$APP_NAME" >> "$APP_LIST_FILE"
+  fi
+}
+
+install_web_terminal() {
+  local config=/home/$DEV_USER/.config/code-server/config.yaml
+  if ! command -v code-server >/dev/null; then
+    curl -fsSL https://code-server.dev/install.sh | sh >/dev/null
+  fi
+  # code-server runs plain on localhost; Caddy terminates TLS and auth.
+  install -d -m 0700 -o "$DEV_USER" -g "$DEV_USER" "$(dirname "$config")"
+  printf 'bind-addr: 127.0.0.1:8080\nauth: none\ncert: false\ndisable-telemetry: true\n' > "$config"
+  chown "$DEV_USER:$DEV_USER" "$config"
+  chmod 600 "$config"
+  cat > /etc/systemd/system/code-server.service <<UNIT
+[Unit]
+Description=code-server browser editor (web terminal)
+After=network-online.target
+
+[Service]
+User=$DEV_USER
+ExecStart=$(command -v code-server) --config $config
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable -q --now code-server >/dev/null
+  systemctl restart code-server
+}
+
+install_opencode() {
+  if [[ ! -x "$DEV_HOME/.opencode/bin/opencode" ]]; then
+    sudo -u "$DEV_USER" bash -lc 'curl -fsSL https://opencode.ai/v2/install | bash' >/dev/null
+  fi
+  cat > /etc/systemd/system/opencode-web.service <<UNIT
+[Unit]
+Description=opencode web server
+After=network-online.target
+
+[Service]
+User=$DEV_USER
+WorkingDirectory=$DEV_HOME
+Environment=HOME=$DEV_HOME
+ExecStart=$DEV_HOME/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable -q --now opencode-web >/dev/null
+  systemctl restart opencode-web
+}
+
+generate_caddyfile() {
+  local app
+  install -d -m 0755 "$CADDY_DIR"
+  {
+    echo '{'
+    echo '  admin off'
+    echo '}'
+    while IFS= read -r app; do
+      case "$app" in
+        web-terminal)
+          echo
+          echo '# web terminal'
+          echo ':8443 {'
+          echo '  tls internal'
+          echo '  basic_auth {'
+          # shellcheck disable=SC2016
+          echo '    workstation {$BROWSER_APPS_PASSWORD_HASH}'
+          echo '  }'
+          echo '  reverse_proxy 127.0.0.1:8080'
+          echo '}'
+          ;;
+        opencode)
+          echo
+          echo '# opencode web'
+          echo ':8444 {'
+          echo '  tls internal'
+          echo '  basic_auth {'
+          # shellcheck disable=SC2016
+          echo '    workstation {$BROWSER_APPS_PASSWORD_HASH}'
+          echo '  }'
+          echo '  reverse_proxy 127.0.0.1:4096'
+          echo '}'
+          ;;
+      esac
+    done < "$APP_LIST_FILE"
+  } > "$CADDY_CFG"
+}
+
+start_caddy() {
+  cat > /etc/systemd/system/caddy.service <<UNIT
+[Unit]
+Description=Caddy web server (browser apps TLS and auth)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+EnvironmentFile=$PASSWORD_ENV_FILE
+ExecStart=$CADDY_BIN run --config $CADDY_CFG --adapter caddyfile
+ExecReload=$CADDY_BIN reload --config $CADDY_CFG --adapter caddyfile
+Restart=on-failure
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable -q --now caddy >/dev/null
+  systemctl restart caddy
+}
+
+main() {
+  install_caddy
+  case "$APP_NAME" in
+    web-terminal) install_web_terminal ;;
+    opencode)     install_opencode ;;
+    *)            die "Unknown browser app: $APP_NAME" ;;
+  esac
+  ensure_app_listed
+  write_password_hash
+  generate_caddyfile
+  start_caddy
+  echo "browser-apps: $APP_NAME enabled behind Caddy"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

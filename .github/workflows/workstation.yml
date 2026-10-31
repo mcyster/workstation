@@ -6,7 +6,7 @@ on:
         description: Action (web-terminal sets up access and issues a new password)
         type: choice
         required: true
-        options: [create, configure, idle-shutdown, start, stop, web-terminal, list, destroy]
+        options: [create, configure, idle-shutdown, opencode, start, stop, web-terminal, list, destroy]
       name:
         description: Workstation name
         type: string
@@ -75,15 +75,17 @@ jobs:
             sed -n 's/^web terminal: /- Browser: /p' output.txt
             sed -n 's/^password: /- Password: /p' output.txt
             echo '### Machines'
-            echo '| Name | Status | Machine type | Zone | IP | Browser | Password |'
-            echo '| --- | --- | --- | --- | --- | --- | --- |'
-            while IFS=, read -r machine status machine_type zone ip browser password; do
+            echo '| Name | Status | Machine type | Zone | IP | Web terminal | OpenCode | Password |'
+            echo '| --- | --- | --- | --- | --- | --- | --- | --- |'
+            while IFS=, read -r machine status machine_type zone ip web_terminal opencode password; do
               [[ -n "$machine" ]] || continue
-              browser_link='—'
+              web_terminal_link='—'
+              opencode_link='—'
               password_link='—'
-              [[ -z "$browser" ]] || browser_link="[Open]($browser)"
+              [[ -z "$web_terminal" ]] || web_terminal_link="[Open]($web_terminal)"
+              [[ -z "$opencode" ]] || opencode_link="[Open]($opencode)"
               [[ -z "$password" ]] || password_link="[Secret Manager]($password)"
-              echo "| $machine | $status | $machine_type | $zone | $ip | $browser_link | $password_link |"
+              echo "| $machine | $status | $machine_type | $zone | $ip | $web_terminal_link | $opencode_link | $password_link |"
             done < <(bash scripts/workstation list --project "$PROJECT" || true)
           } >> "$GITHUB_STEP_SUMMARY"
   discover_environment:

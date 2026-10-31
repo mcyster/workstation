@@ -11,14 +11,16 @@ IMAGE_FAMILY=ubuntu-2404-lts-amd64
 ENVIRONMENT=""
 ENVIRONMENTS=()
 WEB=false
+OPENCODE=false
 YES=false
 ACTION=""
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
-       workstation create [NAME] [--machine-type TYPE] [--web-terminal] [--environment NAME[,NAME...]]
+       workstation create [NAME] [--machine-type TYPE] [--web-terminal|--opencode] [--environment NAME[,NAME...]]
        workstation configure [NAME] --environment NAME[,NAME...]
-Commands: create, configure, idle-shutdown, start, stop, list, shell, config-ssh, web-terminal, destroy
-web-terminal sets up browser access and issues a new password.
+Commands: create, configure, idle-shutdown, opencode, start, stop, list, shell, config-ssh, web-terminal, destroy
+web-terminal enables the code-server browser editor; opencode enables the opencode web UI.
+Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps password.
 configure applies one or more environments (comma-separated) from environments/NAME.sh, in order.
 idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
@@ -35,8 +37,9 @@ while (($#)); do
    --machine-type=*) MACHINE_TYPE="${1#*=}"; shift;;
    --environment=*) ENVIRONMENT="${1#*=}"; shift;;
    --web-terminal) WEB=true; shift;;
+   --opencode) OPENCODE=true; shift;;
    --yes) YES=true; shift;;
-   create|configure|idle-shutdown|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   create|configure|idle-shutdown|opencode|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
    *) NAME="$1"; shift;;
  esac
@@ -67,8 +70,9 @@ PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
 [[ "$PROJECT" != '(unset)' && -n "$PROJECT" ]] || die 'Specify --project'
 INSTANCE="workstation-$NAME"
-WEB_TERMINAL_SECRET="$INSTANCE-web-terminal-password"
+BROWSER_APPS_PASSWORD_SECRET="$INSTANCE-web-terminal-password"
 CODE_SERVER_TAG=workstation-code-server
+OPENCODE_TAG=workstation-opencode
 GCLOUD_ARGS=(--project "$PROJECT")
 if [[ "$ACTION" != list && "$ACTION" != config-ssh ]]; then
  [[ "$ZONE" != '(unset)' && -n "$ZONE" ]] || die 'Specify --zone'
@@ -138,29 +142,105 @@ configure_environment() {
 
     echo "environment: $environment"
   done
+
+  # Enable browser apps the environments declare (e.g. "# workstation-app: opencode").
+  local app apps=()
+  for environment in "${ENVIRONMENTS[@]}"; do
+    script="$ROOT/environments/$environment.sh"
+    while IFS= read -r app; do
+      [[ "$app" == web-terminal || "$app" == opencode ]] || die "Environment declares unknown browser app: $app"
+      for seen in "${apps[@]}"; do
+        [[ "$seen" == "$app" ]] && continue 2
+      done
+      apps+=("$app")
+    done < <(sed -nE 's/^#[[:space:]]+workstation-app:[[:space:]]+([a-z-]+)[[:space:]]*$/\1/p' "$script" | sort -u)
+  done
+  for app in "${apps[@]}"; do
+    enable_browser_app "$app"
+  done
 }
-rotate() {
-  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
-  ensure_setup
-  if [[ "$(field 'tags.items')" != *"$CODE_SERVER_TAG"* ]]; then
-    gcloud compute instances add-tags "$INSTANCE" "${GCLOUD_ARGS[@]}" --tags "$CODE_SERVER_TAG" >/dev/null
-  fi
-  if ! gcloud compute firewall-rules describe "$CODE_SERVER_TAG" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud compute firewall-rules create "$CODE_SERVER_TAG" --project "$PROJECT" --allow tcp:8443 --target-tags "$CODE_SERVER_TAG" >/dev/null
-  fi
-  local password
-  password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
-  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command "CODE_SERVER_PASSWORD='$password' bash -s" < "$ROOT/infra/workstation/web-terminal" >/dev/null
-  if ! gcloud secrets describe "$WEB_TERMINAL_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud secrets create "$WEB_TERMINAL_SECRET" --project "$PROJECT" --replication-policy automatic \
+browser_app_tag() {
+  case "$1" in
+    web-terminal) printf '%s' "$CODE_SERVER_TAG" ;;
+    opencode)     printf '%s' "$OPENCODE_TAG" ;;
+    *)            die "Unknown browser app: $1" ;;
+  esac
+}
+browser_app_port() {
+  case "$1" in
+    web-terminal) printf '%s' 8443 ;;
+    opencode)     printf '%s' 8444 ;;
+    *)            die "Unknown browser app: $1" ;;
+  esac
+}
+store_browser_apps_password() {
+  local password="$1"
+  if ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets create "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" --replication-policy automatic \
       --labels managed-workstation=true,workstation="$NAME" >/dev/null
   fi
-  if ! printf %s "$password" | gcloud secrets versions add "$WEB_TERMINAL_SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
-    die 'Password changed on VM but not saved in Secret Manager. Run web-terminal again.'
+  if ! printf %s "$password" | gcloud secrets versions add "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
+    die 'Password changed on VM but not saved in Secret Manager. Run web-terminal or opencode again.'
   fi
-  echo "web terminal: https://$(field 'networkInterfaces[0].accessConfigs[0].natIP'):8443"
-  echo "secret: $WEB_TERMINAL_SECRET"
-  echo "password: https://console.cloud.google.com/security/secret-manager/secret/$WEB_TERMINAL_SECRET?project=$PROJECT"
+}
+enable_browser_app() {
+  # enable_browser_app APP [ROTATE] [PASSWORD]
+  # ROTATE=true or a new workstation forces a fresh password. An explicit
+  # PASSWORD is used for all apps in one rotation; the caller stores it.
+  local app="$1" rotate_mode="${2:-false}" password="${3:-}"
+  local tag port generated_value=false
+  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+  ensure_setup
+  tag="$(browser_app_tag "$app")"
+  port="$(browser_app_port "$app")"
+  if [[ "$(field 'tags.items')" != *"$tag"* ]]; then
+    gcloud compute instances add-tags "$INSTANCE" "${GCLOUD_ARGS[@]}" --tags "$tag" >/dev/null
+  fi
+  if ! gcloud compute firewall-rules describe "$tag" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud compute firewall-rules create "$tag" --project "$PROJECT" --allow "tcp:$port" --target-tags "$tag" >/dev/null
+  fi
+  if [[ -z "$password" ]]; then
+    if [[ "$rotate_mode" == true ]] || ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
+      password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
+      generated_value=true
+    fi
+  fi
+  if [[ -n "$password" ]]; then
+    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
+      --command "sudo BROWSER_APPS_PASSWORD='$password' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+  else
+    # Reuse the existing bcrypt hash; just make sure the app is behind Caddy.
+    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
+      --command "sudo bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+  fi
+  if [[ "$generated_value" == true ]]; then
+    store_browser_apps_password "$password"
+  fi
+  echo "$app: https://$(field 'networkInterfaces[0].accessConfigs[0].natIP'):$port"
+  echo "secret: $BROWSER_APPS_PASSWORD_SECRET"
+  echo "password: https://console.cloud.google.com/security/secret-manager/secret/$BROWSER_APPS_PASSWORD_SECRET?project=$PROJECT"
+}
+rotate() {
+  # rotate [APP...] : rotate one shared password, then enable each app.
+  # With no arguments, the apps currently tagged on the instance.
+  local app password apps=()
+  if (($#)); then
+    apps=("$@")
+  else
+    for app in web-terminal opencode; do
+      if [[ "$(field 'tags.items')" == *"$(browser_app_tag "$app")"* ]]; then
+        apps+=("$app")
+      fi
+    done
+  fi
+  ((${#apps[@]})) || return 0
+  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+  ensure_setup
+  password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
+  store_browser_apps_password "$password"
+  for app in "${apps[@]}"; do
+    enable_browser_app "$app" true "$password"
+  done
 }
 case "$ACTION" in
  create)
@@ -174,7 +254,10 @@ case "$ACTION" in
         --labels managed-workstation=true \
         --metadata-from-file="startup-script=$ROOT/infra/workstation/setup"
     else echo "$INSTANCE already exists"; fi
-    if [[ "$WEB" == true ]]; then rotate; else ensure_setup; fi
+    app_args=()
+    [[ "$WEB" == true ]] && app_args+=(web-terminal)
+    [[ "$OPENCODE" == true ]] && app_args+=(opencode)
+    if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
     [[ -z "$ENVIRONMENT" ]] || configure_environment
     ;;
   configure) configure_environment;;
@@ -186,25 +269,27 @@ case "$ACTION" in
    [[ -n "$(status)" ]] || die 'Workstation does not exist'
    if [[ "$(status)" != RUNNING ]]; then
      gcloud compute instances start "$INSTANCE" "${GCLOUD_ARGS[@]}"
-     if [[ "$(field 'tags.items')" == *"$CODE_SERVER_TAG"* ]]; then rotate; fi
+     rotate
    fi
    ;;
  stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
- web-terminal) rotate;;
+ web-terminal) rotate web-terminal;;
+ opencode) rotate opencode;;
   list)
     gcloud compute instances list --project "$PROJECT" --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP,tags.items,labels.managed-workstation)' |
       while IFS=, read -r instance state machine zone ip tags managed; do
         [[ "$managed" == true ]] || continue
-        printf '%s,%s,%s,%s,%s' "$instance" "$state" "$machine" "$zone" "$ip"
-        if [[ "$tags" == *"$CODE_SERVER_TAG"* && -n "$ip" ]]; then
-          secret="$instance-web-terminal-password"
-          printf ',https://%s:8443,' "$ip"
-          if gcloud secrets describe "$secret" --project "$PROJECT" >/dev/null 2>&1; then
-            printf 'https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
-              "$secret" "$PROJECT"
-          fi
+        secret="$instance-web-terminal-password"
+        web_terminal_url=""
+        opencode_url=""
+        [[ "$tags" == *"$CODE_SERVER_TAG"* && -n "$ip" ]] && web_terminal_url="https://$ip:8443"
+        [[ "$tags" == *"$OPENCODE_TAG"* && -n "$ip" ]] && opencode_url="https://$ip:8444"
+        printf '%s,%s,%s,%s,%s,%s,%s,' "$instance" "$state" "$machine" "$zone" "$ip" "$web_terminal_url" "$opencode_url"
+        if gcloud secrets describe "$secret" --project "$PROJECT" >/dev/null 2>&1; then
+          printf 'https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
+            "$secret" "$PROJECT"
         fi
         printf '\n'
       done

@@ -39,8 +39,9 @@ if (( uptime_seconds < WORKSTATION_BOOT_GRACE_MIN * 60 )); then
   exit 1
 fi
 
-# A live SSH or web terminal connection means someone may be attached.
-if ss -tnH state established | awk '{print $4}' | grep -Eq ':(22|8443)$'; then
+# A live SSH or browser app (web terminal :8443, opencode :8444) connection
+# means someone may be attached.
+if ss -tnH state established | awk '{print $4}' | grep -Eq ':(22|8443|8444)$'; then
   printf '%s\n' "$now" > "$STATE_FILE"   # reset the idle clock
   exit 1
 fi
