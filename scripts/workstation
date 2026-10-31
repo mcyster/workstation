@@ -9,16 +9,17 @@ MACHINE_TYPE=e2-standard-2
 IMAGE_PROJECT=ubuntu-os-cloud
 IMAGE_FAMILY=ubuntu-2404-lts-amd64
 ENVIRONMENT=""
+ENVIRONMENTS=()
 WEB=false
 YES=false
 ACTION=""
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
-       workstation create [NAME] [--machine-type TYPE] [--web-terminal] [--environment NAME]
-       workstation configure [NAME] --environment NAME
+       workstation create [NAME] [--machine-type TYPE] [--web-terminal] [--environment NAME[,NAME...]]
+       workstation configure [NAME] --environment NAME[,NAME...]
 Commands: create, configure, idle-shutdown, start, stop, list, shell, config-ssh, web-terminal, destroy
 web-terminal sets up browser access and issues a new password.
-configure applies environments/NAME.sh to a running workstation.
+configure applies one or more environments (comma-separated) from environments/NAME.sh, in order.
 idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
 Stop retains disk; destroy permanently deletes disk.
@@ -44,10 +45,23 @@ done
 if [[ ! "$NAME" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || ((${#NAME} > 47)); then
   die 'Invalid workstation name'
 fi
-if [[ -n "$ENVIRONMENT" && ! "$ENVIRONMENT" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]]; then
-  die 'Invalid environment name'
+if [[ -n "$ENVIRONMENT" ]]; then
+  # Accept one or more environments, comma- or whitespace-separated.
+  split="${ENVIRONMENT//[, ]/ }"
+  split="${split//$'\n'/ }"
+  read -r -a ENVIRONMENTS <<< "$split"
+  filtered=()
+  for env in "${ENVIRONMENTS[@]}"; do
+    [[ -n "$env" ]] || continue
+    [[ "$env" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || die "Invalid environment name: $env"
+    for seen in "${filtered[@]}"; do
+      [[ "$seen" == "$env" ]] && continue 2
+    done
+    filtered+=("$env")
+  done
+  ENVIRONMENTS=("${filtered[@]}")
 fi
-[[ "$ACTION" != configure || -n "$ENVIRONMENT" ]] || die 'configure requires --environment'
+[[ "$ACTION" != configure || -n "${ENVIRONMENTS[*]}" ]] || die 'configure requires --environment'
 command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
@@ -89,36 +103,38 @@ read_environment_secret() {
   return 1
 }
 configure_environment() {
-  local script="$ROOT/environments/$ENVIRONMENT.sh"
-  local bundle secret value
-
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
-  [[ -f "$script" ]] || die "Environment script not found: environments/$ENVIRONMENT.sh"
   ensure_setup
 
-  (
-    umask 077
-    bundle="$(mktemp)"
-    trap 'rm -f "$bundle"' EXIT
+  local env script bundle secret value
+  for env in "${ENVIRONMENTS[@]}"; do
+    script="$ROOT/environments/$env.sh"
+    [[ -f "$script" ]] || die "Environment script not found: environments/$env.sh"
 
-    {
-      printf 'set -euo pipefail\nset +x\n'
-      printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$ENVIRONMENT"
-      printf 'export WORKSTATION_NAME=%q\n' "$NAME"
-      while IFS= read -r secret; do
-        if ! value="$(read_environment_secret "$secret")"; then
-          die "GitHub Environment secret is not configured: $secret"
-        fi
-        printf 'export %s=%q\n' "$secret" "$value"
-      done < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
-      cat "$script"
-    } > "$bundle"
+    (
+      umask 077
+      bundle="$(mktemp)"
+      trap 'rm -f "$bundle"' EXIT
 
-    gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet \
-      --command 'sudo -H -u developer bash -l -se' < "$bundle"
-  )
+      {
+        printf 'set -euo pipefail\nset +x\n'
+        printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$env"
+        printf 'export WORKSTATION_NAME=%q\n' "$NAME"
+        while IFS= read -r secret; do
+          if ! value="$(read_environment_secret "$secret")"; then
+            die "GitHub Environment secret is not configured: $secret"
+          fi
+          printf 'export %s=%q\n' "$secret" "$value"
+        done < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
+        cat "$script"
+      } > "$bundle"
 
-  echo "environment: $ENVIRONMENT"
+      gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet \
+        --command 'sudo -H -u developer bash -l -se' < "$bundle"
+    )
+
+    echo "environment: $env"
+  done
 }
 rotate() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'

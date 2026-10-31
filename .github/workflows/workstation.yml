@@ -20,7 +20,7 @@ on:
         type: boolean
         default: true
       environment:
-        description: Optional environment; see environments/NAME.sh
+        description: Comma-separated environments from environments/NAME.sh to configure, in order
         type: string
         required: false
 permissions:
@@ -91,22 +91,8 @@ jobs:
     if: ${{ always() && needs.workstation.result == 'success' && inputs.environment != '' && (inputs.action == 'create' || inputs.action == 'configure') }}
     runs-on: ubuntu-latest
     outputs:
-      secret_1: ${{ steps.secrets.outputs.secret_1 }}
-      secret_2: ${{ steps.secrets.outputs.secret_2 }}
-      secret_3: ${{ steps.secrets.outputs.secret_3 }}
-      secret_4: ${{ steps.secrets.outputs.secret_4 }}
-      secret_5: ${{ steps.secrets.outputs.secret_5 }}
-      secret_6: ${{ steps.secrets.outputs.secret_6 }}
-      secret_7: ${{ steps.secrets.outputs.secret_7 }}
-      secret_8: ${{ steps.secrets.outputs.secret_8 }}
-      secret_9: ${{ steps.secrets.outputs.secret_9 }}
-      secret_10: ${{ steps.secrets.outputs.secret_10 }}
-      secret_11: ${{ steps.secrets.outputs.secret_11 }}
-      secret_12: ${{ steps.secrets.outputs.secret_12 }}
-      secret_13: ${{ steps.secrets.outputs.secret_13 }}
-      secret_14: ${{ steps.secrets.outputs.secret_14 }}
-      secret_15: ${{ steps.secrets.outputs.secret_15 }}
-      secret_16: ${{ steps.secrets.outputs.secret_16 }}
+      environments: ${{ steps.secrets.outputs.environments }}
+      secrets: ${{ steps.secrets.outputs.secrets }}
     steps:
       - uses: actions/checkout@v4
       - name: Read environment requirements
@@ -116,26 +102,58 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
-          [[ "$ENVIRONMENT" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo '::error::Invalid environment name'; exit 1; }
-          script="environments/$ENVIRONMENT.sh"
-          [[ -f "$script" ]] || { echo "::error::Environment script not found: $script"; exit 1; }
-          mapfile -t required < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
-          ((${#required[@]} <= 16)) || { echo '::error::Environment scripts support at most 16 secrets'; exit 1; }
-          for index in {1..16}; do
-            echo "secret_$index=${required[index-1]:-}" >> "$GITHUB_OUTPUT"
+          split="${ENVIRONMENT//[, ]/ }"
+          split="${split//$'\n'/ }"
+          read -r -a environments <<< "$split"
+          names=()
+          for e in "${environments[@]}"; do
+            [[ -n "$e" ]] || continue
+            [[ "$e" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "::error::Invalid environment name: $e"; exit 1; }
+            for seen in "${names[@]}"; do [[ "$seen" == "$e" ]] && continue 2; done
+            names+=("$e")
           done
+          ((${#names[@]})) || { echo '::error::No environments given'; exit 1; }
+
+          arrays=()
+          for e in "${names[@]}"; do
+            script="environments/$e.sh"
+            [[ -f "$script" ]] || { echo "::error::Environment script not found: $script"; exit 1; }
+            mapfile -t required < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
+            ((${#required[@]} <= 16)) || { echo "::error::$e declares more than 16 secrets"; exit 1; }
+            while ((${#required[@]} < 16)); do required+=(''); done
+            arr='['
+            sep=''
+            for s in "${required[@]}"; do arr+="${sep}\"${s}\""; sep=','; done
+            arr+=']'
+            arrays+=("$arr")
+          done
+
+          env_list='['; secrets_map='{'
+          sep=''
+          for i in "${!names[@]}"; do
+            env_list+="${sep}\"${names[$i]}\""
+            secrets_map+="${sep}\"${names[$i]}\": ${arrays[$i]}"
+            sep=','
+          done
+          env_list+=']'; secrets_map+='}'
+          printf 'environments=%s\n' "$env_list" >> "$GITHUB_OUTPUT"
+          printf 'secrets=%s\n' "$secrets_map" >> "$GITHUB_OUTPUT"
   configure:
     needs: [workstation, discover_environment]
     if: ${{ always() && needs.workstation.result == 'success' && needs.discover_environment.result == 'success' }}
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJson(needs.discover_environment.outputs.environments || '[]') }}
+    environment: ${{ matrix.environment }}
     env:
       PROJECT: ${{ vars.WORKSTATION_GCLOUD_PROJECT }}
       ZONE: ${{ vars.WORKSTATION_GCLOUD_ZONE || 'us-central1-a' }}
       PROVIDER: ${{ secrets.WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
       SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
       NAME: ${{ inputs.name }}
-      ENVIRONMENT: ${{ inputs.environment }}
+      ENVIRONMENT: ${{ matrix.environment }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
@@ -152,38 +170,38 @@ jobs:
       - name: Configure environment
         shell: bash
         env:
-          WORKSTATION_SECRET_1_NAME: ${{ needs.discover_environment.outputs.secret_1 }}
-          WORKSTATION_SECRET_1_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_1] }}
-          WORKSTATION_SECRET_2_NAME: ${{ needs.discover_environment.outputs.secret_2 }}
-          WORKSTATION_SECRET_2_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_2] }}
-          WORKSTATION_SECRET_3_NAME: ${{ needs.discover_environment.outputs.secret_3 }}
-          WORKSTATION_SECRET_3_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_3] }}
-          WORKSTATION_SECRET_4_NAME: ${{ needs.discover_environment.outputs.secret_4 }}
-          WORKSTATION_SECRET_4_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_4] }}
-          WORKSTATION_SECRET_5_NAME: ${{ needs.discover_environment.outputs.secret_5 }}
-          WORKSTATION_SECRET_5_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_5] }}
-          WORKSTATION_SECRET_6_NAME: ${{ needs.discover_environment.outputs.secret_6 }}
-          WORKSTATION_SECRET_6_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_6] }}
-          WORKSTATION_SECRET_7_NAME: ${{ needs.discover_environment.outputs.secret_7 }}
-          WORKSTATION_SECRET_7_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_7] }}
-          WORKSTATION_SECRET_8_NAME: ${{ needs.discover_environment.outputs.secret_8 }}
-          WORKSTATION_SECRET_8_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_8] }}
-          WORKSTATION_SECRET_9_NAME: ${{ needs.discover_environment.outputs.secret_9 }}
-          WORKSTATION_SECRET_9_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_9] }}
-          WORKSTATION_SECRET_10_NAME: ${{ needs.discover_environment.outputs.secret_10 }}
-          WORKSTATION_SECRET_10_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_10] }}
-          WORKSTATION_SECRET_11_NAME: ${{ needs.discover_environment.outputs.secret_11 }}
-          WORKSTATION_SECRET_11_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_11] }}
-          WORKSTATION_SECRET_12_NAME: ${{ needs.discover_environment.outputs.secret_12 }}
-          WORKSTATION_SECRET_12_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_12] }}
-          WORKSTATION_SECRET_13_NAME: ${{ needs.discover_environment.outputs.secret_13 }}
-          WORKSTATION_SECRET_13_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_13] }}
-          WORKSTATION_SECRET_14_NAME: ${{ needs.discover_environment.outputs.secret_14 }}
-          WORKSTATION_SECRET_14_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_14] }}
-          WORKSTATION_SECRET_15_NAME: ${{ needs.discover_environment.outputs.secret_15 }}
-          WORKSTATION_SECRET_15_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_15] }}
-          WORKSTATION_SECRET_16_NAME: ${{ needs.discover_environment.outputs.secret_16 }}
-          WORKSTATION_SECRET_16_VALUE: ${{ secrets[needs.discover_environment.outputs.secret_16] }}
+          WORKSTATION_SECRET_1_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][0] }}
+          WORKSTATION_SECRET_1_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][0]] }}
+          WORKSTATION_SECRET_2_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][1] }}
+          WORKSTATION_SECRET_2_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][1]] }}
+          WORKSTATION_SECRET_3_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][2] }}
+          WORKSTATION_SECRET_3_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][2]] }}
+          WORKSTATION_SECRET_4_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][3] }}
+          WORKSTATION_SECRET_4_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][3]] }}
+          WORKSTATION_SECRET_5_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][4] }}
+          WORKSTATION_SECRET_5_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][4]] }}
+          WORKSTATION_SECRET_6_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][5] }}
+          WORKSTATION_SECRET_6_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][5]] }}
+          WORKSTATION_SECRET_7_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][6] }}
+          WORKSTATION_SECRET_7_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][6]] }}
+          WORKSTATION_SECRET_8_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][7] }}
+          WORKSTATION_SECRET_8_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][7]] }}
+          WORKSTATION_SECRET_9_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][8] }}
+          WORKSTATION_SECRET_9_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][8]] }}
+          WORKSTATION_SECRET_10_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][9] }}
+          WORKSTATION_SECRET_10_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][9]] }}
+          WORKSTATION_SECRET_11_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][10] }}
+          WORKSTATION_SECRET_11_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][10]] }}
+          WORKSTATION_SECRET_12_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][11] }}
+          WORKSTATION_SECRET_12_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][11]] }}
+          WORKSTATION_SECRET_13_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][12] }}
+          WORKSTATION_SECRET_13_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][12]] }}
+          WORKSTATION_SECRET_14_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][13] }}
+          WORKSTATION_SECRET_14_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][13]] }}
+          WORKSTATION_SECRET_15_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][14] }}
+          WORKSTATION_SECRET_15_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][14]] }}
+          WORKSTATION_SECRET_16_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][15] }}
+          WORKSTATION_SECRET_16_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][15]] }}
         run: |
           for index in {1..16}; do
             name_variable="WORKSTATION_SECRET_${index}_NAME"
