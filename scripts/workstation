@@ -178,9 +178,23 @@ configure_environment() {
       apps+=("$app")
     done < <(sed -nE 's/^#[[:space:]]+workstation-app:[[:space:]]+([a-z-]+)[[:space:]]*$/\1/p' "$script" | sort -u)
   done
+
+  # Apps already installed reuse the current password; newly declared apps join
+  # a single tagged-set rotation so every app keeps the same shared password.
+  local app new_apps=()
   for app in "${apps[@]}"; do
-    enable_browser_app "$app"
+    if [[ "$(field 'tags.items')" == *"$(browser_app_tag "$app")"* ]]; then
+      enable_browser_app "$app"
+    else
+      new_apps+=("$app")
+    fi
   done
+  if ((${#new_apps[@]})); then
+    for app in "${new_apps[@]}"; do
+      ensure_browser_app_tag "$app"
+    done
+    rotate
+  fi
 }
 browser_app_tag() {
   case "$1" in
@@ -312,7 +326,7 @@ enable_browser_app() {
   fi
   if [[ -n "$password" ]]; then
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APPS_PASSWORD='$password' BROWSER_APPS_DOMAIN='$DOMAIN' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APPS_PASSWORD='$password' OPENCODE_SERVER_PASSWORD='$password' BROWSER_APPS_DOMAIN='$DOMAIN' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   else
     # Reuse the existing bcrypt hash; just make sure the app is behind Caddy.
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
