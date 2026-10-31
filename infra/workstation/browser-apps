@@ -135,6 +135,9 @@ generate_caddyfile() {
   {
     echo '{'
     echo '  admin off'
+    echo '  servers {'
+    echo '    protocols h1 h2'
+    echo '  }'
     echo '}'
     while IFS= read -r app; do
       case "$app" in
