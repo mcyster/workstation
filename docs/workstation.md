@@ -182,6 +182,15 @@ Caddy requests the certificate automatically. To make that work the CLI:
 
 The Google Cloud DNS zone for the hostname is auto-detected in the project; pass `--dns-zone ZONE` to name it explicitly, or `--no-dns` to manage DNS yourself (and create the A record manually). Port-8443/8444 links keep working alongside the public URL. The workstation still stores only the bcrypt hash; the plaintext password stays in Secret Manager, and the certificate is issued by Let's Encrypt to a domain you own.
 
+If your DNS provider has no API for the plan you use (for example ZoneEdit's free tier), give the workstation a **static IP** and set the A record once:
+
+```sh
+scripts/workstation static-ip main                       # reserve and attach a fixed IP
+scripts/workstation web-terminal main --domain main.workstation.example.com --no-dns
+```
+
+Create the A record in the provider's console pointing at the printed static IP; it stays valid across `stop`/`start` because the address no longer changes. `--no-dns` skips the CLI's record updates, and Caddy still obtains and renews the Let's Encrypt certificate through port 80.
+
 ## Provisioning and ownership
 
 - `scripts/workstation`: instance lifecycle, firewall, SSH, and password rotation.

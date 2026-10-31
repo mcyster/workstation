@@ -22,7 +22,7 @@ Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation create [NAME] [--machine-type TYPE] [--web-terminal|--opencode] [--environment NAME[,NAME...]]
        workstation configure [NAME] --environment NAME[,NAME...]
        workstation web-terminal|opencode [NAME] [--domain HOST] [--dns-zone ZONE] [--no-dns]
-Commands: create, configure, idle-shutdown, opencode, start, stop, list, shell, config-ssh, web-terminal, destroy
+Commands: create, configure, idle-shutdown, opencode, static-ip, start, stop, list, shell, config-ssh, web-terminal, destroy
 web-terminal enables the code-server browser editor; opencode enables the opencode web UI.
 Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps password.
 --domain points HOST at the workstation (short-TTL DNS record, firewall 80/443) and requests a
@@ -51,7 +51,7 @@ while (($#)); do
    --web-terminal) WEB=true; shift;;
    --opencode) OPENCODE=true; shift;;
    --yes) YES=true; shift;;
-   create|configure|idle-shutdown|opencode|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   create|configure|idle-shutdown|opencode|static-ip|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
    *) NAME="$1"; shift;;
  esac
@@ -312,6 +312,26 @@ rotate() {
     enable_browser_app "$app" true "$password"
   done
 }
+static_ip() {
+  # Reserve a regional static IP for the workstation so a DNS A record set once
+  # in an external provider (e.g. ZoneEdit) stays valid across stop/start.
+  local region="${ZONE%-*}" ip_addr current
+  [[ -n "$(status)" ]] || die 'Workstation does not exist'
+  if ! gcloud compute addresses describe "$INSTANCE" --region "$region" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud compute addresses create "$INSTANCE" --region "$region" --project "$PROJECT" >/dev/null
+  fi
+  ip_addr="$(gcloud compute addresses describe "$INSTANCE" --region "$region" --project "$PROJECT" --format='value(address)')"
+  current="$(field 'networkInterfaces[0].accessConfigs[0].natIP')"
+  if [[ "$current" != "$ip_addr" ]]; then
+    if [[ -n "$current" ]]; then
+      gcloud compute instances delete-access-config "$INSTANCE" "${GCLOUD_ARGS[@]}" --access-config-name=external-nat >/dev/null
+    fi
+    gcloud compute instances add-access-config "$INSTANCE" "${GCLOUD_ARGS[@]}" \
+      --access-config-name=external-nat --address "$ip_addr" >/dev/null
+  fi
+  echo "static ip: $ip_addr"
+  echo "Set an A record for your domain to this address once; then use --domain with --no-dns."
+}
 case "$ACTION" in
  create)
     if [[ -z "$(status)" ]]; then
@@ -345,6 +365,7 @@ case "$ACTION" in
  stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
+ static-ip) static_ip;;
  web-terminal) rotate web-terminal;;
  opencode) rotate opencode;;
   list)
