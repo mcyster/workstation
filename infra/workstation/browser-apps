@@ -92,6 +92,9 @@ install_opencode() {
   if [[ ! -x "$DEV_HOME/.opencode/bin/opencode" ]]; then
     sudo -u "$DEV_USER" bash -lc 'curl -fsSL https://opencode.ai/v2/install | bash' >/dev/null
   fi
+  # Serve opencode as its managed background service (--service): opencode CLI
+  # commands like 'pair' and provider config set with 'service set env' talk to
+  # that server, so pairing tokens and credentials reach the daemon behind Caddy.
   cat > /etc/systemd/system/opencode-web.service <<UNIT
 [Unit]
 Description=opencode web server
@@ -101,7 +104,7 @@ After=network-online.target
 User=$DEV_USER
 WorkingDirectory=$DEV_HOME
 Environment=HOME=$DEV_HOME
-ExecStart=$DEV_HOME/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096
+ExecStart=$DEV_HOME/.opencode/bin/opencode serve --service --hostname 127.0.0.1 --port 4096
 Restart=on-failure
 
 [Install]
