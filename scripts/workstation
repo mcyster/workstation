@@ -16,9 +16,10 @@ usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation create [NAME] [--machine-type TYPE] [--web-terminal] [--environment NAME]
        workstation configure [NAME] --environment NAME
-Commands: create, configure, start, stop, list, shell, config-ssh, web-terminal, destroy
+Commands: create, configure, idle-shutdown, start, stop, list, shell, config-ssh, web-terminal, destroy
 web-terminal sets up browser access and issues a new password.
 configure applies environments/NAME.sh to a running workstation.
+idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
 Stop retains disk; destroy permanently deletes disk.
 HELP
@@ -34,7 +35,7 @@ while (($#)); do
    --environment=*) ENVIRONMENT="${1#*=}"; shift;;
    --web-terminal) WEB=true; shift;;
    --yes) YES=true; shift;;
-   create|configure|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   create|configure|idle-shutdown|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
    *) NAME="$1"; shift;;
  esac
@@ -74,6 +75,8 @@ ensure_setup() {
     echo 'Completing workstation setup...'
     gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/setup"
   fi
+  # Install (or refresh) the idle auto-shutdown watchdog on every management call.
+  gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown" >/dev/null || die 'Could not install idle shutdown'
   gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
 }
 read_environment_secret() {
@@ -156,6 +159,10 @@ case "$ACTION" in
     [[ -z "$ENVIRONMENT" ]] || configure_environment
     ;;
   configure) configure_environment;;
+ idle-shutdown)
+   [[ "$(status)" == RUNNING ]] || die 'Workstation not running'
+   gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown"
+   ;;
  start)
    [[ -n "$(status)" ]] || die 'Workstation does not exist'
    if [[ "$(status)" != RUNNING ]]; then
