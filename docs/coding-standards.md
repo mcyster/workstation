@@ -16,7 +16,11 @@ Apply these in order (from tog's principles):
 1. **Readability and understandability.** The code should carry most of the
    explanation of its structure and behavior.
 2. **Correctness** through validation and clear failure at boundaries.
-3. **Simplicity.** Prefer the smallest change that satisfies the requirement.
+3. **Simplicity.** The result should be easy to understand: the code maps
+   clearly to the problem it solves, with no machinery beyond what the problem
+   requires. Simplicity is a property of the design that remains, not of how it
+   was reached — it can require a large change, and a small diff is not evidence
+   of a simple design.
 
 ## Naming
 
