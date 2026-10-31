@@ -28,8 +28,10 @@ Apply these in order (from tog's principles):
 - Do not use **single-letter names** for project-defined variables, parameters,
   or loop counters.
 - Avoid abbreviations in project-defined names. For example, prefer
-  `CODE_SERVER_TAG` over `TAG`, `GCLOUD_ARGS` over `GC`, and
-  `one_minute_load` over `load1`.
+  `CODE_SERVER_TAG` over `TAG` and `GCLOUD_ARGS` over `GC`.
+- Name a variable for its meaning and keep values in named constants:
+  prefer a `load_average` variable read using a `LOAD_AVERAGE_MINUTES`
+  constant over `one_minute_load`, which encodes a value in its name.
 - Name a retry loop's counter `attempt` rather than `i` or `_`.
 - Standard and domain terminology is allowed where it is the convention:
   positional parameters (`$1`, `$2`), awk field references, and established
