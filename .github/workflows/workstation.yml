@@ -102,42 +102,42 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
-          split="${ENVIRONMENT//[, ]/ }"
-          split="${split//$'\n'/ }"
-          read -r -a environments <<< "$split"
-          names=()
-          for e in "${environments[@]}"; do
-            [[ -n "$e" ]] || continue
-            [[ "$e" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "::error::Invalid environment name: $e"; exit 1; }
-            for seen in "${names[@]}"; do [[ "$seen" == "$e" ]] && continue 2; done
-            names+=("$e")
+          environment_input="${ENVIRONMENT//[, ]/ }"
+          environment_input="${environment_input//$'\n'/ }"
+          read -r -a candidate_names <<< "$environment_input"
+          environment_names=()
+          for name in "${candidate_names[@]}"; do
+            [[ -n "$name" ]] || continue
+            [[ "$name" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "::error::Invalid environment name: $name"; exit 1; }
+            for seen in "${environment_names[@]}"; do [[ "$seen" == "$name" ]] && continue 2; done
+            environment_names+=("$name")
           done
-          ((${#names[@]})) || { echo '::error::No environments given'; exit 1; }
+          ((${#environment_names[@]})) || { echo '::error::No environments given'; exit 1; }
 
-          arrays=()
-          for e in "${names[@]}"; do
-            script="environments/$e.sh"
+          secret_arrays_json=()
+          for environment_name in "${environment_names[@]}"; do
+            script="environments/$environment_name.sh"
             [[ -f "$script" ]] || { echo "::error::Environment script not found: $script"; exit 1; }
-            mapfile -t required < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
-            ((${#required[@]} <= 16)) || { echo "::error::$e declares more than 16 secrets"; exit 1; }
-            while ((${#required[@]} < 16)); do required+=(''); done
-            arr='['
-            sep=''
-            for s in "${required[@]}"; do arr+="${sep}\"${s}\""; sep=','; done
-            arr+=']'
-            arrays+=("$arr")
+            mapfile -t declared_secrets < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
+            ((${#declared_secrets[@]} <= 16)) || { echo "::error::$environment_name declares more than 16 secrets"; exit 1; }
+            while ((${#declared_secrets[@]} < 16)); do declared_secrets+=(''); done
+            secret_array='['
+            separator=''
+            for secret in "${declared_secrets[@]}"; do secret_array+="${separator}\"${secret}\""; separator=','; done
+            secret_array+=']'
+            secret_arrays_json+=("$secret_array")
           done
 
-          env_list='['; secrets_map='{'
-          sep=''
-          for i in "${!names[@]}"; do
-            env_list+="${sep}\"${names[$i]}\""
-            secrets_map+="${sep}\"${names[$i]}\": ${arrays[$i]}"
-            sep=','
+          environment_list_json='['; environment_secrets='{'
+          separator=''
+          for index in "${!environment_names[@]}"; do
+            environment_list_json+="${separator}\"${environment_names[$index]}\""
+            environment_secrets+="${separator}\"${environment_names[$index]}\": ${secret_arrays_json[$index]}"
+            separator=','
           done
-          env_list+=']'; secrets_map+='}'
-          printf 'environments=%s\n' "$env_list" >> "$GITHUB_OUTPUT"
-          printf 'secrets=%s\n' "$secrets_map" >> "$GITHUB_OUTPUT"
+          environment_list_json+=']'; environment_secrets+='}'
+          printf 'environments=%s\n' "$environment_list_json" >> "$GITHUB_OUTPUT"
+          printf 'secrets=%s\n' "$environment_secrets" >> "$GITHUB_OUTPUT"
   configure:
     needs: [workstation, discover_environment]
     if: ${{ always() && needs.workstation.result == 'success' && needs.discover_environment.result == 'success' }}

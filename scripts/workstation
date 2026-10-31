@@ -51,13 +51,13 @@ if [[ -n "$ENVIRONMENT" ]]; then
   split="${split//$'\n'/ }"
   read -r -a ENVIRONMENTS <<< "$split"
   filtered=()
-  for env in "${ENVIRONMENTS[@]}"; do
-    [[ -n "$env" ]] || continue
-    [[ "$env" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || die "Invalid environment name: $env"
+  for environment in "${ENVIRONMENTS[@]}"; do
+    [[ -n "$environment" ]] || continue
+    [[ "$environment" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || die "Invalid environment name: $environment"
     for seen in "${filtered[@]}"; do
-      [[ "$seen" == "$env" ]] && continue 2
+      [[ "$seen" == "$environment" ]] && continue 2
     done
-    filtered+=("$env")
+    filtered+=("$environment")
   done
   ENVIRONMENTS=("${filtered[@]}")
 fi
@@ -67,31 +67,34 @@ PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
 [[ "$PROJECT" != '(unset)' && -n "$PROJECT" ]] || die 'Specify --project'
 INSTANCE="workstation-$NAME"
-SECRET="$INSTANCE-web-terminal-password"
-TAG=workstation-code-server
-GC=(--project "$PROJECT")
+WEB_TERMINAL_SECRET="$INSTANCE-web-terminal-password"
+CODE_SERVER_TAG=workstation-code-server
+GCLOUD_ARGS=(--project "$PROJECT")
 if [[ "$ACTION" != list && "$ACTION" != config-ssh ]]; then
  [[ "$ZONE" != '(unset)' && -n "$ZONE" ]] || die 'Specify --zone'
- GC+=(--zone "$ZONE")
+ GCLOUD_ARGS+=(--zone "$ZONE")
 fi
-field() { gcloud compute instances describe "$INSTANCE" "${GC[@]}" --format="value($1)" 2>/dev/null || true; }
+field() { gcloud compute instances describe "$INSTANCE" "${GCLOUD_ARGS[@]}" --format="value($1)" 2>/dev/null || true; }
 status() { field status; }
 wait_ssh() {
-  for _ in {1..40}; do
-    if gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command true >/dev/null 2>&1; then return 0; fi
+  local attempt
+  attempt=0
+  while (( attempt < 40 )); do
+    if gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command true >/dev/null 2>&1; then return 0; fi
     sleep 5
+    attempt=$(( attempt + 1 ))
   done
   die 'SSH did not become available'
 }
 ensure_setup() {
   wait_ssh
-  if ! gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1; then
+  if ! gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1; then
     echo 'Completing workstation setup...'
-    gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/setup"
+    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/setup"
   fi
   # Install (or refresh) the idle auto-shutdown watchdog on every management call.
-  gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown" >/dev/null || die 'Could not install idle shutdown'
-  gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
+  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown" >/dev/null || die 'Could not install idle shutdown'
+  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
 }
 read_environment_secret() {
   local name="$1"
@@ -106,10 +109,10 @@ configure_environment() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
 
-  local env script bundle secret value
-  for env in "${ENVIRONMENTS[@]}"; do
-    script="$ROOT/environments/$env.sh"
-    [[ -f "$script" ]] || die "Environment script not found: environments/$env.sh"
+  local environment script bundle secret value
+  for environment in "${ENVIRONMENTS[@]}"; do
+    script="$ROOT/environments/$environment.sh"
+    [[ -f "$script" ]] || die "Environment script not found: environments/$environment.sh"
 
     (
       umask 077
@@ -118,7 +121,7 @@ configure_environment() {
 
       {
         printf 'set -euo pipefail\nset +x\n'
-        printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$env"
+        printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$environment"
         printf 'export WORKSTATION_NAME=%q\n' "$NAME"
         while IFS= read -r secret; do
           if ! value="$(read_environment_secret "$secret")"; then
@@ -129,42 +132,42 @@ configure_environment() {
         cat "$script"
       } > "$bundle"
 
-      gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet \
+      gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
         --command 'sudo -H -u developer bash -l -se' < "$bundle"
     )
 
-    echo "environment: $env"
+    echo "environment: $environment"
   done
 }
 rotate() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
-  if [[ "$(field 'tags.items')" != *"$TAG"* ]]; then
-    gcloud compute instances add-tags "$INSTANCE" "${GC[@]}" --tags "$TAG" >/dev/null
+  if [[ "$(field 'tags.items')" != *"$CODE_SERVER_TAG"* ]]; then
+    gcloud compute instances add-tags "$INSTANCE" "${GCLOUD_ARGS[@]}" --tags "$CODE_SERVER_TAG" >/dev/null
   fi
-  if ! gcloud compute firewall-rules describe "$TAG" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud compute firewall-rules create "$TAG" --project "$PROJECT" --allow tcp:8443 --target-tags "$TAG" >/dev/null
+  if ! gcloud compute firewall-rules describe "$CODE_SERVER_TAG" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud compute firewall-rules create "$CODE_SERVER_TAG" --project "$PROJECT" --allow tcp:8443 --target-tags "$CODE_SERVER_TAG" >/dev/null
   fi
   local password
   password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
-  gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command "CODE_SERVER_PASSWORD='$password' bash -s" < "$ROOT/infra/workstation/web-terminal" >/dev/null
-  if ! gcloud secrets describe "$SECRET" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud secrets create "$SECRET" --project "$PROJECT" --replication-policy automatic \
+  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command "CODE_SERVER_PASSWORD='$password' bash -s" < "$ROOT/infra/workstation/web-terminal" >/dev/null
+  if ! gcloud secrets describe "$WEB_TERMINAL_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets create "$WEB_TERMINAL_SECRET" --project "$PROJECT" --replication-policy automatic \
       --labels managed-workstation=true,workstation="$NAME" >/dev/null
   fi
-  if ! printf %s "$password" | gcloud secrets versions add "$SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
+  if ! printf %s "$password" | gcloud secrets versions add "$WEB_TERMINAL_SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
     die 'Password changed on VM but not saved in Secret Manager. Run web-terminal again.'
   fi
   echo "web terminal: https://$(field 'networkInterfaces[0].accessConfigs[0].natIP'):8443"
-  echo "secret: $SECRET"
-  echo "password: https://console.cloud.google.com/security/secret-manager/secret/$SECRET?project=$PROJECT"
+  echo "secret: $WEB_TERMINAL_SECRET"
+  echo "password: https://console.cloud.google.com/security/secret-manager/secret/$WEB_TERMINAL_SECRET?project=$PROJECT"
 }
 case "$ACTION" in
  create)
     if [[ -z "$(status)" ]]; then
-      gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
+      gcloud compute machine-types describe "$MACHINE_TYPE" "${GCLOUD_ARGS[@]}" >/dev/null
       # GCE executes startup-script metadata directly; no cloud-init dependency is required.
-      gcloud compute instances create "$INSTANCE" "${GC[@]}" \
+      gcloud compute instances create "$INSTANCE" "${GCLOUD_ARGS[@]}" \
         --machine-type "$MACHINE_TYPE" \
         --image-project "$IMAGE_PROJECT" \
         --image-family "$IMAGE_FAMILY" \
@@ -177,17 +180,17 @@ case "$ACTION" in
   configure) configure_environment;;
  idle-shutdown)
    [[ "$(status)" == RUNNING ]] || die 'Workstation not running'
-   gcloud compute ssh "$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown"
+   gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown"
    ;;
  start)
    [[ -n "$(status)" ]] || die 'Workstation does not exist'
    if [[ "$(status)" != RUNNING ]]; then
-     gcloud compute instances start "$INSTANCE" "${GC[@]}"
-     if [[ "$(field 'tags.items')" == *"$TAG"* ]]; then rotate; fi
+     gcloud compute instances start "$INSTANCE" "${GCLOUD_ARGS[@]}"
+     if [[ "$(field 'tags.items')" == *"$CODE_SERVER_TAG"* ]]; then rotate; fi
    fi
    ;;
- stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GC[@]}";;
- shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GC[@]}";;
+ stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GCLOUD_ARGS[@]}";;
+ shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
  web-terminal) rotate;;
   list)
@@ -195,7 +198,7 @@ case "$ACTION" in
       while IFS=, read -r instance state machine zone ip tags managed; do
         [[ "$managed" == true ]] || continue
         printf '%s,%s,%s,%s,%s' "$instance" "$state" "$machine" "$zone" "$ip"
-        if [[ "$tags" == *"$TAG"* && -n "$ip" ]]; then
+        if [[ "$tags" == *"$CODE_SERVER_TAG"* && -n "$ip" ]]; then
           secret="$instance-web-terminal-password"
           printf ',https://%s:8443,' "$ip"
           if gcloud secrets describe "$secret" --project "$PROJECT" >/dev/null 2>&1; then
@@ -210,6 +213,6 @@ case "$ACTION" in
    [[ -n "$(status)" ]] || { echo 'Workstation does not exist'; exit 0; }
    [[ "$(field 'labels.managed-workstation')" == true ]] || die 'Not a managed workstation; refusing to delete'
    if [[ "$YES" != true ]]; then read -r -p "Type $NAME to permanently delete VM and boot disk: " CONFIRM; [[ "$CONFIRM" == "$NAME" ]] || die 'Cancelled'; fi
-   gcloud compute instances delete "$INSTANCE" "${GC[@]}" --delete-disks boot --quiet
+   gcloud compute instances delete "$INSTANCE" "${GCLOUD_ARGS[@]}" --delete-disks boot --quiet
    ;;
 esac
