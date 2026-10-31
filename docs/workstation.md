@@ -151,6 +151,31 @@ Run `web-terminal` to set up browser access or issue a new password. `start` rot
 
 VMs have names `workstation-NAME` and the label `managed-workstation=true`. The CLI refuses to destroy an instance without its ownership label. Workstations are independent of tog and do not clone any repository automatically.
 
+## Idle shutdown
+
+Workstations power themselves off after being continuously idle, so a forgotten workstation stops accruing compute charges. The watchdog is installed on every workstation whenever setup or a management command runs, and also explicitly via:
+
+```sh
+scripts/workstation idle-shutdown main
+```
+
+A workstation counts as **in use** while any of these hold:
+
+- an active SSH connection (port 22),
+- an active code-server web terminal connection (port 8443),
+- sustained CPU load at or above the vCPU count (long builds and agent jobs).
+
+When none of these hold for `WORKSTATION_IDLE_HOURS` (default 4) it runs a graceful `systemctl poweroff`, which stops the VM the same way `stop` does: the disk is preserved and `start` resumes it. Checking starts only 15 minutes after boot (`WORKSTATION_BOOT_GRACE_MIN`) so provisioning and updates finish first.
+
+To tune the idle window or boot grace on a running workstation, edit `/etc/default/workstation-idle-shutdown` and restart the timer:
+
+```sh
+sudo systemctl disable --now workstation-idle-shutdown.timer
+sudo systemctl enable --now workstation-idle-shutdown.timer
+```
+
+To disable auto-shutdown, `sudo systemctl disable --now workstation-idle-shutdown.timer`. The next management command that runs setup (`create`, `configure`, `web-terminal`, or `start` on a web-terminal workstation) reinstalls it.
+
 ## Costs and recovery
 
 Stopping avoids running compute charges, but the disk still costs money. Destroy deletes the disk permanently. There are no automatic backups, snapshots, or restores. Password recovery requires only GitHub Actions access to run the `web-terminal` action and Google Cloud Secret Manager access to read the new password.
