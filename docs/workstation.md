@@ -164,6 +164,20 @@ scripts/workstation opencode main
 
 Browse to either URL and accept the self-signed certificate warning. Both apps run plain on localhost; Caddy terminates TLS and authenticates the browser, so the workstation stores only a bcrypt hash of the password. The plaintext password is kept in the Google Cloud Secret Manager secret `workstation-NAME-web-terminal-password`. The workflow identity can create this secret and append versions, but cannot read its values. Use Secret Manager in the Google Cloud console to see the active password.
 
+opencode keeps its own sign-in, whose username/password prompt has a known upstream auth loop ([#19920](https://github.com/anomalyco/opencode/issues/19920)). Sign the browser in with a **one-time pairing link** instead — from your laptop:
+
+```sh
+scripts/workstation opencode-link main --project PROJECT --zone ZONE
+```
+
+or from inside the workstation (web terminal at `:8443`), as `developer`:
+
+```sh
+~/.opencode/bin/opencode pair --url https://EXTERNAL_IP:8444
+```
+
+Open the printed link within 5 minutes (single use); Caddy asks for `workstation` + the shared password once more, then opencode signs the browser in with a 30-day session cookie. Rotating the browser-apps password signs opencode sessions out.
+
 `start` rotates the password after a stopped VM resumes; `web-terminal` and `opencode` rotate it on demand. `create` without those flags keeps both ports closed. Browser access is public on ports 8443 and 8444 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
 
 ## Provisioning and ownership
