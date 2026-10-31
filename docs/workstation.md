@@ -162,7 +162,14 @@ scripts/workstation web-terminal main
 scripts/workstation opencode main
 ```
 
-Browse to either URL and accept the self-signed certificate warning. Both apps run plain on localhost; Caddy terminates TLS and authenticates the browser with a bcrypt hash, so Caddy's password gate stores only a hash. OpenCode additionally keeps its own in-page sign-in: sign in with username `opencode` and the same shared password (stored in a root-only env file opencode needs at runtime). The plaintext password is kept in the Google Cloud Secret Manager secret `workstation-NAME-web-terminal-password`. The workflow identity can create this secret and append versions, but cannot read its values. Use Secret Manager in the Google Cloud console to see the active password.
+Browse to either URL and accept the self-signed certificate warning. Both apps run plain on localhost; Caddy terminates TLS and authenticates the browser with a bcrypt hash, so Caddy's password gate stores only a hash. The plaintext password is kept in the Google Cloud Secret Manager secret `workstation-NAME-web-terminal-password`. The workflow identity can create this secret and append versions, but cannot read its values. Use Secret Manager in the Google Cloud console to see the active password.
+
+opencode keeps its own sign-in. Its in-page username/password prompt is affected by a known upstream auth loop ([#19920](https://github.com/anomalyco/opencode/issues/19920)), so sign in with a one-time pairing link instead — it sets a 30-day session cookie and skips the broken prompt entirely:
+
+```sh
+scripts/workstation opencode-link main
+# open the printed link within 5 minutes; Caddy still asks for workstation + the shared password first
+```
 
 `start` rotates the password after a stopped VM resumes; `web-terminal` and `opencode` rotate it on demand. `create` without those flags keeps both ports closed. Browser access is public on ports 8443 and 8444 when enabled; protect the Google Cloud project and Secret Manager permissions and avoid leaving expensive API credentials in unattended sessions. Consider narrowing the firewall source range when practical.
 

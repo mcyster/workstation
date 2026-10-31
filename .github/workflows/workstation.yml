@@ -6,7 +6,7 @@ on:
         description: Action (web-terminal sets up access and issues a new password)
         type: choice
         required: true
-        options: [create, configure, idle-shutdown, opencode, start, static-ip, stop, web-terminal, list, destroy]
+        options: [create, configure, idle-shutdown, opencode, opencode-link, start, static-ip, stop, web-terminal, list, destroy]
       name:
         description: Workstation name
         type: string
