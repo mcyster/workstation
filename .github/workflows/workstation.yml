@@ -19,6 +19,10 @@ on:
         description: Browser editor on create
         type: boolean
         default: true
+      opencode:
+        description: OpenCode web UI on create
+        type: boolean
+        default: true
       environment:
         description: Comma-separated environments from environments/NAME.sh to configure, in order
         type: string
@@ -38,6 +42,7 @@ jobs:
       NAME: ${{ inputs.name }}
       MACHINE_TYPE: ${{ inputs.machine_type }}
       WEB_TERMINAL: ${{ inputs.web_terminal }}
+      OPENCODE: ${{ inputs.opencode }}
       ENVIRONMENT: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
@@ -63,6 +68,7 @@ jobs:
             if [[ "$ACTION" == create ]]; then
               args+=(--machine-type "$MACHINE_TYPE")
               [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
+              [[ "$OPENCODE" != true ]] || args+=(--opencode)
             fi
             if [[ "$ACTION" == destroy ]]; then args+=(--yes); fi
             bash scripts/workstation "${args[@]}" > output.txt
