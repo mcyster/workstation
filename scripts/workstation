@@ -153,10 +153,11 @@ web_access() {
   } | gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' >/dev/null
   add_secret "$SECRET_WEB" "$web" website
   add_secret "$SECRET_RECOVERY" "$recovery" recovery
-  echo "browser: https://$(external_ip)"
+  echo "opencode: https://$(external_ip)"
+  echo "coder: https://$(external_ip)/coder"
   echo "password secret: $SECRET_WEB"
   echo "password: https://console.cloud.google.com/security/secret-manager/secret/$SECRET_WEB?project=$PROJECT"
-  echo "recovery: https://console.cloud.google.com/security/secret-manager/secret/$SECRET_RECOVERY?project=$PROJECT"
+  echo "serial recovery: https://console.cloud.google.com/security/secret-manager/secret/$SECRET_RECOVERY?project=$PROJECT"
 }
 case "$ACTION" in
  create)
@@ -236,15 +237,12 @@ EOF
         printf '%s,%s,%s,%s,%s' "$instance" "$state" "$machine" "$zone" "$ip"
         if [[ "$tags" == *"$TAG"* && -n "$ip" ]]; then
           web_secret="$instance-web-password"
-          recovery_secret="$instance-recovery-password"
-          printf ',https://%s,' "$ip"
+          # coder url, opencode url, password link
+          printf ',https://%s/coder,' "$ip"
+          printf 'https://%s,' "$ip"
           if gcloud secrets describe "$web_secret" --project "$PROJECT" >/dev/null 2>&1; then
             printf 'https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
               "$web_secret" "$PROJECT"
-          fi
-          if gcloud secrets describe "$recovery_secret" --project "$PROJECT" >/dev/null 2>&1; then
-            printf ',https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
-              "$recovery_secret" "$PROJECT"
           fi
         fi
         printf '\n'

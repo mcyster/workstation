@@ -247,10 +247,11 @@ SSH keys are managed by gcloud; once `config-ssh` has run, standard `ssh`,
 
 ## Browser access
 
-Browser access is a Caddy HTTPS reverse proxy in front of the OpenCode web
-service and the browser terminal, authenticated with HTTP basic auth.
+Browser access is a Caddy HTTPS reverse proxy in front of three services,
+authenticated with HTTP basic auth:
 
 - `https://EXTERNAL_IP` — OpenCode web interface.
+- `https://EXTERNAL_IP/coder` — Coder, VS Code in the browser (code-server).
 - `https://EXTERNAL_IP/terminal` — terminal in the browser.
 
 The certificate is self-signed; accept the warning in your browser. All
@@ -266,6 +267,12 @@ workflow identity can create these secrets and append versions but cannot read
 them; use Secret Manager in the console to see the active password. `start`
 rotates the passwords after a stopped VM resumes; `web-terminal` rotates them
 on demand.
+
+The **serial recovery** password (`workstation-NAME-recovery-password`) is the
+`root` login password for the GCE serial console. You only need it for
+out-of-band rescue — when SSH and the browser interfaces are unreachable — by
+connecting to the serial console in the Google Cloud console. Normal daily use
+uses the web password only.
 
 ## Remote recovery
 
@@ -294,7 +301,8 @@ a known-good image to boot from.
 - `nixos/base.nix` — base workstation configuration.
 - `nixos/gce.nix` — Google Compute Engine platform configuration and image.
 - `nixos/configuration.nix` — the complete workstation (enables extensions).
-- `nixos/extensions/` — optional workstation modules.
+- `nixos/extensions/` — optional workstation modules (opencode, coder, caddy,
+  browser terminal, idle shutdown).
 - `scripts/workstation` — instance lifecycle, images, SSH, password rotation.
 - `infra/workstation/provision` — provisions the static Google Cloud
   infrastructure (APIs, identity, IAM, image bucket, firewall rule).

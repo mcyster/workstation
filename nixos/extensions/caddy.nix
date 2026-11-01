@@ -92,6 +92,13 @@ in
           basic_auth * {
             opencode {env.WORKSTATION_WEB_PASSWORD_HASH}
           }
+          @coder-root {
+            path /coder
+          }
+          redir @coder-root /coder/ 301
+          handle_path /coder/* {
+            reverse_proxy 127.0.0.1:${toString config.services.workstation.coder.port}
+          }
           @terminal {
             path /terminal /terminal/*
           }

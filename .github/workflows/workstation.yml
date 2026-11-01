@@ -70,20 +70,21 @@ jobs:
             echo "- Action: $ACTION"
             echo "- Project: $PROJECT"
             echo "- Zone: $ZONE"
-            sed -n 's/^browser: /- Browser: /p' output.txt
+            sed -n 's/^opencode: /- Open Code: /p' output.txt
+            sed -n 's/^coder: /- Coder: /p' output.txt
             sed -n 's/^password: /- Password: /p' output.txt
-            sed -n 's/^recovery: /- Recovery: /p' output.txt
+            sed -n 's/^serial recovery: /- Serial recovery: /p' output.txt
             echo '### Machines'
-            echo '| Name | Status | Machine type | Zone | IP | Browser | Password | Recovery |'
+            echo '| Name | Status | Machine type | Zone | IP | Password | Coder | Open Code |'
             echo '| --- | --- | --- | --- | --- | --- | --- | --- |'
-            while IFS=, read -r machine status machine_type zone ip browser password recovery; do
+            while IFS=, read -r machine status machine_type zone ip coder opencode password; do
               [[ -n "$machine" ]] || continue
-              browser_link='—'
               password_link='—'
-              recovery_link='—'
-              [[ -z "$browser" ]] || browser_link="[Open]($browser)"
+              coder_link='—'
+              opencode_link='—'
               [[ -z "$password" ]] || password_link="[Secret Manager]($password)"
-              [[ -z "$recovery" ]] || recovery_link="[Secret Manager]($recovery)"
-              echo "| $machine | $status | $machine_type | $zone | $ip | $browser_link | $password_link | $recovery_link |"
+              [[ -z "$coder" ]] || coder_link="[Open]($coder)"
+              [[ -z "$opencode" ]] || opencode_link="[Open]($opencode)"
+              echo "| $machine | $status | $machine_type | $zone | $ip | $password_link | $coder_link | $opencode_link |"
             done < <(bash scripts/workstation list --project "$PROJECT" || true)
           } >> "$GITHUB_STEP_SUMMARY"
