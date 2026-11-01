@@ -81,6 +81,10 @@ ensure_self_signed_cert() {
 }
 
 install_service() {
+  local env_file_line=""
+  if [[ -f "/home/developer/.env.$APP_NAME" ]]; then
+    env_file_line="EnvironmentFile=/home/developer/.env.$APP_NAME"
+  fi
   cat > "$SYSTEMD_DIR/workstation-$APP_NAME.service" <<UNIT
 [Unit]
 Description=$APP_NAME workstation service
@@ -90,7 +94,7 @@ After=network-online.target
 User=$BROWSER_APP_USER
 WorkingDirectory=$BROWSER_APP_WORKDIR
 Environment=HOME=$BROWSER_APP_WORKDIR
-EnvironmentFile=/home/developer/.env.$APP_NAME
+$env_file_line
 ExecStart=$BROWSER_APP_EXEC
 Restart=on-failure
 
