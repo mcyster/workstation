@@ -121,6 +121,47 @@ default_environments() {
   # Environment apps loaded by default when none are specified.
   jq -r 'to_entries[] | select(.value.environment == true and .value.default == true) | .key' "$APPS_JSON"
 }
+app_packages() {
+  # Base packages plus per-app packages declared in apps.json.
+  jq -r '.packages[]? // empty' "$APPS_JSON"
+  local app
+  for app in "$@"; do
+    jq -r --arg app "$app" '.[$app].packages[]? // empty' "$APPS_JSON"
+  done
+}
+ensure_app_packages() {
+  # Idempotently install apt packages declared for the base and the given apps.
+  # gh needs the GitHub CLI apt repository, set up here when it is declared.
+  local app pkgs=() needs_gh=false p
+  mapfile -t pkgs < <(app_packages "$@")
+  ((${#pkgs[@]})) || return 0
+  [[ "$(status)" == RUNNING ]] || return 0
+  for p in "${pkgs[@]}"; do [[ "$p" == gh ]] && needs_gh=true; done
+  (
+    remote="$(mktemp)"
+    trap 'rm -f "$remote"' EXIT
+    {
+      printf 'set -euo pipefail\n'
+      printf 'export DEBIAN_FRONTEND=noninteractive\n'
+      printf 'apt-get update >/dev/null\n'
+      if [[ "$needs_gh" == true ]]; then
+        cat <<'GH'
+if ! command -v gh >/dev/null; then
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list
+  apt-get update >/dev/null
+fi
+GH
+      fi
+      for p in "${pkgs[@]}"; do
+        printf 'dpkg -s %s >/dev/null 2>&1 || apt-get install -y --no-install-recommends %s >/dev/null\n' "$p" "$p"
+      done
+    } > "$remote"
+    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
+      --command 'sudo bash -s' < "$remote" >/dev/null
+  )
+}
 app_service_field() {
   jq -r --arg app "$1" --arg field "$2" '.[$app].service[$field] // empty' "$APPS_JSON"
 }
@@ -190,6 +231,7 @@ restart_service_apps() {
 configure_environment() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
+  ensure_app_packages "${ENVIRONMENTS[@]}"
 
   local environment setup_script bundle
   for environment in "${ENVIRONMENTS[@]}"; do
@@ -331,6 +373,7 @@ case "$ACTION" in
     [[ "$OPENCODE" == true ]] && app_args+=(opencode)
     materialize_tool_env_files
     if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
+    ensure_app_packages code opencode
     [[ -z "${ENVIRONMENTS[*]}" ]] || configure_environment
     restart_service_apps
     ;;
