@@ -10,7 +10,7 @@ flock 9
 [[ ! -f "$MARKER" ]] || exit 0
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >/dev/null
-apt-get install -y --no-install-recommends sudo curl git ca-certificates direnv >/dev/null
+apt-get install -y --no-install-recommends sudo curl git ca-certificates >/dev/null
 id "$USER_NAME" >/dev/null 2>&1 || useradd -m -s /bin/bash "$USER_NAME"
 usermod -aG sudo "$USER_NAME"
 if getent group nix-users >/dev/null; then usermod -aG nix-users "$USER_NAME"; fi
@@ -24,7 +24,7 @@ if ! grep -q 'direnv hook bash' "$HOME_DIR/.bashrc"; then
   cat >> "$HOME_DIR/.bashrc" <<'BASHRC'
 
 if [ -e /etc/profile.d/nix.sh ]; then . /etc/profile.d/nix.sh; fi
-eval "$(direnv hook bash)"
+if command -v direnv >/dev/null; then eval "$(direnv hook bash)"; fi
 BASHRC
 fi
 chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"
