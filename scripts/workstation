@@ -168,6 +168,16 @@ materialize_tool_env_files() {
       --command 'sudo -H -u developer bash -l -se' < "$bundle" >/dev/null
   )
 }
+restart_service_apps() {
+  # Reload service apps so they pick up env-file changes from their
+  # EnvironmentFile. try-restart no-ops for units that are not running.
+  local app units=()
+  for app in $(app_service_apps); do units+=("workstation-$app.service"); done
+  ((${#units[@]})) || return 0
+  [[ "$(status)" == RUNNING ]] || return 0
+  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
+    --command "sudo systemctl try-restart ${units[*]}" >/dev/null 2>&1 || true
+}
 configure_environment() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
@@ -197,6 +207,7 @@ configure_environment() {
 
     echo "environment: $environment"
   done
+  restart_service_apps
 }
 browser_app_tag() {
   printf 'workstation-%s\n' "$1"
@@ -309,9 +320,10 @@ case "$ACTION" in
     app_args=()
     [[ "$WEB" == true ]] && app_args+=(code)
     [[ "$OPENCODE" == true ]] && app_args+=(opencode)
-    if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
     materialize_tool_env_files
+    if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
     [[ -z "$ENVIRONMENT" ]] || configure_environment
+    restart_service_apps
     ;;
   configure) configure_environment;;
  idle-shutdown)
