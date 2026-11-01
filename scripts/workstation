@@ -22,7 +22,7 @@ Commands: create, configure, idle-shutdown, opencode, opencode-link, start, stop
 web-terminal enables the code-server browser editor; opencode enables the opencode web UI.
 Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps password.
 opencode-link prints a one-time pairing link that signs the browser into opencode web.
-configure applies one or more environments (comma-separated) from environments/NAME.sh, in order.
+configure applies one or more environment apps (comma-separated) from the apps.json app registry, in order.
 idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
 Stop retains disk; destroy permanently deletes disk.
@@ -67,13 +67,12 @@ if [[ -n "$ENVIRONMENT" ]]; then
 fi
 [[ "$ACTION" != configure || -n "${ENVIRONMENTS[*]}" ]] || die 'configure requires --environment'
 command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
+command -v jq >/dev/null || die 'Install jq'
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
 [[ "$PROJECT" != '(unset)' && -n "$PROJECT" ]] || die 'Specify --project'
 INSTANCE="workstation-$NAME"
 BROWSER_APPS_PASSWORD_SECRET="$INSTANCE-web-terminal-password"
-CODE_SERVER_TAG=workstation-code-server
-OPENCODE_TAG=workstation-opencode
 GCLOUD_ARGS=(--project "$PROJECT")
 if [[ "$ACTION" != list && "$ACTION" != config-ssh ]]; then
  [[ "$ZONE" != '(unset)' && -n "$ZONE" ]] || die 'Specify --zone'
@@ -101,20 +100,25 @@ ensure_setup() {
   gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown" >/dev/null || die 'Could not install idle shutdown'
   gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
 }
-read_environment_secret() {
-  local name="$1"
-
-  if [[ -v "$name" && -n "${!name}" ]]; then
-    printf '%s' "${!name}"
-    return 0
-  fi
-  return 1
+APPS_JSON="$ROOT/apps.json"
+app_env_names() {
+  # Apps with an env file: each maps to a fixed GitHub secret WORKSTATION_ENV_<APP>
+  # whose value is written to ~/.env.<app> on the workstation.
+  jq -r 'to_entries[] | select(.value.env == true) | .key' "$APPS_JSON"
 }
-tool_env_names() {
-  # Registered tool environment files: each maps to a fixed GitHub secret
-  # WORKSTATION_ENV_<TOOL> whose value is written to ~/.env.<tool> on the
-  # workstation (repository-level default, per-environment override).
-  printf '%s\n' code opencode tog
+app_service_apps() {
+  # Apps that run as a supervised service behind Caddy.
+  jq -r 'to_entries[] | select(.value.service != null) | .key' "$APPS_JSON"
+}
+app_environment_names() {
+  # Apps selectable as a configurable environment (have a setup script).
+  jq -r 'to_entries[] | select(.value.environment == true) | .key' "$APPS_JSON"
+}
+app_service_field() {
+  jq -r --arg app "$1" --arg field "$2" '.[$app].service[$field] // empty' "$APPS_JSON"
+}
+app_setup_path() {
+  jq -r --arg app "$1" '.[$app].setup // empty' "$APPS_JSON"
 }
 tool_env_var() {
   printf 'WORKSTATION_ENV_%s\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
@@ -125,7 +129,7 @@ emit_tool_env_files() {
   # script see the variables. Paths use $HOME so they resolve on the remote
   # host (the user running the bundle), not on the machine that emits it.
   local tool tool_var value_file value_q wrote_files=()
-  for tool in $(tool_env_names); do
+  for tool in $(app_env_names); do
     tool_var="$(tool_env_var "$tool")"
     value_file="${!tool_var:-}"
     if [[ -n "$value_file" ]]; then
@@ -168,10 +172,11 @@ configure_environment() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
 
-  local environment script bundle secret value
+  local environment setup_script bundle
   for environment in "${ENVIRONMENTS[@]}"; do
-    script="$ROOT/environments/$environment.sh"
-    [[ -f "$script" ]] || die "Environment script not found: environments/$environment.sh"
+    [[ " $(app_environment_names) " == *" $environment "* ]] || die "Not a configurable environment app: $environment"
+    setup_script="$ROOT/$(app_setup_path "$environment")"
+    [[ -f "$setup_script" ]] || die "Environment setup script not found: $setup_script"
 
     (
       umask 077
@@ -183,13 +188,7 @@ configure_environment() {
         printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$environment"
         printf 'export WORKSTATION_NAME=%q\n' "$NAME"
         emit_tool_env_files
-        while IFS= read -r secret; do
-          if ! value="$(read_environment_secret "$secret")"; then
-            die "GitHub Environment secret is not configured: $secret"
-          fi
-          printf 'export %s=%q\n' "$secret" "$value"
-        done < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
-        cat "$script"
+        cat "$setup_script"
       } > "$bundle"
 
       gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
@@ -198,51 +197,12 @@ configure_environment() {
 
     echo "environment: $environment"
   done
-
-  # Enable browser apps the environments declare (e.g. "# workstation-app: opencode").
-  local app apps=()
-  for environment in "${ENVIRONMENTS[@]}"; do
-    script="$ROOT/environments/$environment.sh"
-    while IFS= read -r app; do
-      [[ "$app" == web-terminal || "$app" == opencode ]] || die "Environment declares unknown browser app: $app"
-      for seen in "${apps[@]}"; do
-        [[ "$seen" == "$app" ]] && continue 2
-      done
-      apps+=("$app")
-    done < <(sed -nE 's/^#[[:space:]]+workstation-app:[[:space:]]+([a-z-]+)[[:space:]]*$/\1/p' "$script" | sort -u)
-  done
-
-  # Already-installed apps reuse the current password; apps being enabled for
-  # the first time join a single tagged-set rotation so every app keeps the
-  # same shared password.
-  local app new_apps=()
-  for app in "${apps[@]}"; do
-    if [[ "$(field 'tags.items')" == *"$(browser_app_tag "$app")"* ]]; then
-      enable_browser_app "$app"
-    else
-      new_apps+=("$app")
-    fi
-  done
-  if ((${#new_apps[@]})); then
-    for app in "${new_apps[@]}"; do
-      ensure_browser_app_tag "$app"
-    done
-    rotate
-  fi
 }
 browser_app_tag() {
-  case "$1" in
-    web-terminal) printf '%s' "$CODE_SERVER_TAG" ;;
-    opencode)     printf '%s' "$OPENCODE_TAG" ;;
-    *)            die "Unknown browser app: $1" ;;
-  esac
+  printf 'workstation-%s\n' "$1"
 }
 browser_app_port() {
-  case "$1" in
-    web-terminal) printf '%s' 8443 ;;
-    opencode)     printf '%s' 8444 ;;
-    *)            die "Unknown browser app: $1" ;;
-  esac
+  app_service_field "$1" "port"
 }
 store_browser_apps_password() {
   local password="$1"
@@ -271,11 +231,23 @@ enable_browser_app() {
   # ROTATE=true or a new workstation forces a fresh password. An explicit
   # PASSWORD is used for all apps in one rotation; the caller stores it.
   local app="$1" rotate_mode="${2:-false}" password="${3:-}"
-  local port generated_value=false
+  local port upstream user workdir exec_line generated_value=false setup_script
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
   ensure_browser_app_tag "$app"
-  port="$(browser_app_port "$app")"
+  port="$(app_service_field "$app" "port")"
+  upstream="$(app_service_field "$app" "upstream")"
+  user="$(app_service_field "$app" "user")"
+  workdir="$(app_service_field "$app" "working_dir")"
+  exec_line="$(jq -r --arg app "$app" '.[$app].service.exec | join(" ")' "$APPS_JSON")"
+
+  # Per-app install/config (binary, files) runs first, as root.
+  setup_script="$ROOT/app/$app/setup.sh"
+  if [[ -f "$setup_script" ]]; then
+    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
+      --command 'sudo bash -s' < "$setup_script" >/dev/null
+  fi
+
   if [[ -z "$password" ]]; then
     if [[ "$rotate_mode" == true ]] || ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
       password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
@@ -284,11 +256,11 @@ enable_browser_app() {
   fi
   if [[ -n "$password" ]]; then
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APPS_PASSWORD='$password' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APPS_PASSWORD='$password' BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   else
     # Reuse the existing bcrypt hash; just make sure the app is behind Caddy.
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   fi
   if ! gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /etc/workstation/browser-apps' >/dev/null 2>&1; then
     die 'Browser app install did not complete on the workstation'
@@ -302,12 +274,12 @@ enable_browser_app() {
 }
 rotate() {
   # rotate [APP...] : rotate one shared password, then enable each app.
-  # With no arguments, the apps currently tagged on the instance.
+  # With no arguments, the service apps currently tagged on the instance.
   local app password apps=()
   if (($#)); then
     apps=("$@")
   else
-    for app in web-terminal opencode; do
+    for app in $(app_service_apps); do
       if [[ "$(field 'tags.items')" == *"$(browser_app_tag "$app")"* ]]; then
         apps+=("$app")
       fi
@@ -335,7 +307,7 @@ case "$ACTION" in
         --metadata-from-file="startup-script=$ROOT/infra/workstation/setup"
     else echo "$INSTANCE already exists"; fi
     app_args=()
-    [[ "$WEB" == true ]] && app_args+=(web-terminal)
+    [[ "$WEB" == true ]] && app_args+=(code)
     [[ "$OPENCODE" == true ]] && app_args+=(opencode)
     if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
     materialize_tool_env_files
@@ -356,7 +328,7 @@ case "$ACTION" in
  stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
- web-terminal) ensure_browser_app_tag web-terminal; rotate;;
+ web-terminal) ensure_browser_app_tag code; rotate;;
   opencode) ensure_browser_app_tag opencode; rotate;;
   opencode-link)
     [[ "$(status)" == RUNNING ]] || die 'Workstation not running'
@@ -364,8 +336,8 @@ case "$ACTION" in
     ip="$(field 'networkInterfaces[0].accessConfigs[0].natIP')"
     [[ -n "$ip" ]] || die 'No external IP'
     link="$(gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "timeout 20 sudo -u developer /home/developer/.opencode/bin/opencode pair --url https://$ip:8444" 2>/dev/null |
-      grep -oE "https://$ip:8444/auth/connect/[A-Za-z0-9_-]+" | head -1)"
+      --command "timeout 20 sudo -u developer /home/developer/.opencode/bin/opencode pair --url https://$ip:$(app_service_field opencode port)" 2>/dev/null |
+      grep -oE "https://$ip:$(app_service_field opencode port)/auth/connect/[A-Za-z0-9_-]+" | head -1)"
     [[ -n "$link" ]] || die 'Could not generate an opencode pairing link (is opencode running?)'
     echo "opencode link: $link (one-time, expires in 5 minutes)"
     ;;
@@ -376,8 +348,8 @@ case "$ACTION" in
         secret="$instance-web-terminal-password"
         web_terminal_url=""
         opencode_url=""
-        [[ "$tags" == *"$CODE_SERVER_TAG"* && -n "$ip" ]] && web_terminal_url="https://$ip:8443"
-        [[ "$tags" == *"$OPENCODE_TAG"* && -n "$ip" ]] && opencode_url="https://$ip:8444"
+        [[ "$tags" == *"$(browser_app_tag code)"* && -n "$ip" ]] && web_terminal_url="https://$ip:$(app_service_field code port)"
+        [[ "$tags" == *"$(browser_app_tag opencode)"* && -n "$ip" ]] && opencode_url="https://$ip:$(app_service_field opencode port)"
         printf '%s,%s,%s,%s,%s,%s,%s,' "$instance" "$state" "$machine" "$zone" "$ip" "$web_terminal_url" "$opencode_url"
         if gcloud secrets describe "$secret" --project "$PROJECT" >/dev/null 2>&1; then
           printf 'https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \

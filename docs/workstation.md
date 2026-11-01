@@ -104,71 +104,35 @@ After upgrading an existing installation to per-workstation secrets, rerun `gith
 
 SSH keys are managed by gcloud. Once `config-ssh` has run, standard `ssh`, `scp`, and `rsync` can be used.
 
-## Project environments
+## Apps
 
-An optional project environment is a version-controlled script at `environments/NAME.sh`. The name must match the GitHub Environment used by the workflow. For example, the GitHub Environment `tog` maps to `environments/tog.sh`.
+Workstations are described by a declarative app registry in `apps.json`. Each app name maps to optional capabilities:
 
-Declare required GitHub Environment secrets at the top of the script:
+- **`env`** — a `.env` file: the repository secret `WORKSTATION_ENV_<APP>` (value = file content) is written to `~/.env.<app>` (0600) and sourced before setup runs.
+- **`service`** — a supervised browser app: systemd unit, port, and Caddy site ([Browser access](#browser-access)) generated from those fields.
+- **`environment` + `setup`** — a configurable environment: `app/<name>/setup.sh` runs at `configure`.
 
-```bash
-#!/usr/bin/env bash
-# workstation-secret: OPENCODE_API_KEY
-# workstation-secret: TOG_GITHUB_TOKEN
+| App | env | service | setup |
+| --- | --- | --- | --- |
+| `code` | ✓ | `:8443` | `app/code/setup.sh` |
+| `opencode` | ✓ | `:8444` | `app/opencode/setup.sh` |
+| `tog` | ✓ | — | `app/tog/setup.sh` (environment) |
 
-set -euo pipefail
+- Service apps install at `create` (web terminal and opencode by default) and rotate together behind one shared browser-apps password.
+- `configure NAME...` runs the environment app's setup script (e.g. `app/tog/setup.sh`) as `developer`, with `WORKSTATION_ENVIRONMENT`/`WORKSTATION_NAME` set and the env files already materialized and sourced. Scripts should be idempotent.
+- Select environments in the workflow's **environment** field or with `--environment` on the CLI (comma-separated, applied in order, duplicates ignored). GitHub Actions runs one configure job per environment in a matrix.
 
-# Clone projects, install tools, authenticate clients, and run direnv here.
-```
+### Pushing env file values
 
-Each directive must contain one GitHub secret name, with up to 16 secrets per environment. The workflow exports only the declared values while the script runs. It does not write them to disk or include them in command arguments. The script decides whether and how a tool should persist its credentials.
-
-Declare which browser apps the project needs at the top of the script, one per line:
-
-```bash
-# workstation-app: web-terminal
-# workstation-app: opencode
-```
-
-Applying the environment enables each declared browser app behind Caddy ([Browser access](#browser-access)) using the workstation's shared browser-apps password. `tog` declares `opencode`, so a tog-configured workstation gets the OpenCode web UI without extra flags.
-
-The script runs as `developer` with `HOME=/home/developer`. It also receives `WORKSTATION_NAME` and `WORKSTATION_ENVIRONMENT`. Make the script idempotent so it can be applied repeatedly.
-
-Create a GitHub Environment with the same name and add the declared secrets to it. Then select that environment when running `create` or `configure` in GitHub Actions. `create` provisions the workstation before applying the environment. `configure` reapplies it to an existing running workstation.
-
-Pass multiple environments as a comma-separated list, either in the workflow's **environment** field or to `--environment` on the CLI. Environments are applied in the order given and each environment's script runs with `WORKSTATION_ENVIRONMENT` set to its own name. GitHub Actions runs one configure job per environment (a matrix), with each job bound to that environment's GitHub Environment so its secrets stay scoped. Duplicates are ignored.
-
-The local CLI reads declared secrets from its current environment:
+Keep the raw values (and any repository holding them, such as a private `secrets` repo) only on your machine, never on a workstation; `env-sync` there produces `~/.env.<app>`. Upload them to GitHub repository secrets with:
 
 ```sh
-OPENCODE_API_KEY=... scripts/workstation create main --environment tog
-OPENCODE_API_KEY=... scripts/workstation configure main --environment tog
+scripts/workstation-secrets-push                # all apps, repo-level
+scripts/workstation-secrets-push opencode tog  # just those apps
+scripts/workstation-secrets-push --dir ~/secrets   # read ~/secrets/.env.<app>
 ```
 
-Environment scripts are trusted code with access to the secrets they declare. Protect the corresponding GitHub Environment and review script changes before running them.
-
-## Tool environment files
-
-Tools read plain `.env` files on the workstation rather than requiring every key as a named GitHub secret. Each registered tool has one fixed-name secret `WORKSTATION_ENV_<TOOL>` whose value is the `.env` content, and configure writes it to `~/.env.<tool>` (mode 600) and sources it for the environment script.
-
-| Tool | Secret (value = file content) | Workstation file |
-| --- | --- | --- |
-| code | `WORKSTATION_ENV_CODE` | `~/.env.code` |
-| opencode | `WORKSTATION_ENV_OPENCODE` | `~/.env.opencode` |
-| tog | `WORKSTATION_ENV_TOG` | `~/.env.tog` |
-
-Secrets are stored at **repository level**; every `configure` job sees them, so one value per tool is all that's needed.
-
-### Push from a machine that holds the secrets
-
-Keep the raw values (and any repository holding them, such as a private `secrets` repo) only on your machine, never on a workstation. Upload them to GitHub repository secrets with:
-
-```sh
-scripts/workstation-secrets-push                # all tools, repo-level
-scripts/workstation-secrets-push opencode tog  # just those tools
-scripts/workstation-secrets-push --dir ~/secrets   # read ~/secrets/.env.<tool>
-```
-
-The tool reads `~/.env.<TOOL>` (or `--dir`/`.env.<TOOL>`), uploads only files whose fingerprint changed (so repeated runs are no-ops), never prints values, and requires confirmation. It needs the GitHub CLI (`gh`), included in the development shell.
+The tool reads `~/.env.<APP>` (or `--dir`/`.env.<APP>`), uploads only files whose fingerprint changed (so repeated runs are no-ops), never prints values, and requires confirmation. It needs the GitHub CLI (`gh`), included in the development shell.
 
 ## Browser access
 
