@@ -28,6 +28,7 @@ configure re-applies the workstation flake (nixos-rebuild switch) to a running i
 create builds the base image (requires a Linux machine with Nix) and deploys the flake.
 recover boots a fresh instance from the base image with your original disk attached for rescue.
 Default name: main. Default machine type: e2-standard-2. Default boot disk: 100 GB.
+Create refuses to overwrite an existing workstation; destroy it first.
 Stop retains disk; destroy permanently deletes disk.
 HELP
 }
@@ -159,20 +160,23 @@ web_access() {
 }
 case "$ACTION" in
  create)
-    if [[ -z "$(status)" ]]; then
-      ensure_bucket
-      IMG="$(ensure_gce_image)"
-      gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
-      # GCE serial console is enabled so a failed boot can be recovered from
-      # the serial console. SSH keys are delivered by the guest agent.
-      gcloud compute instances create "$INSTANCE" "${GC[@]}" \
-        --machine-type "$MACHINE_TYPE" \
-        --image "$IMG" \
-        --boot-disk-size "$BOOT_DISK_SIZE" \
-        --boot-disk-type pd-balanced \
-        --labels managed-workstation=true \
-        --metadata serial-port-enable=true
-    else echo "$INSTANCE already exists"; fi
+    if [[ -n "$(status)" ]]; then
+      # `create` never replaces an existing workstation; destroying is a
+      # deliberate, separate step so a misapplied command cannot delete data.
+      die "$INSTANCE already exists. Destroy it first with: scripts/workstation destroy $NAME"
+    fi
+    ensure_bucket
+    IMG="$(ensure_gce_image)"
+    gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
+    # GCE serial console is enabled so a failed boot can be recovered from
+    # the serial console. SSH keys are delivered by the guest agent.
+    gcloud compute instances create "$INSTANCE" "${GC[@]}" \
+      --machine-type "$MACHINE_TYPE" \
+      --image "$IMG" \
+      --boot-disk-size "$BOOT_DISK_SIZE" \
+      --boot-disk-type pd-balanced \
+      --labels managed-workstation=true \
+      --metadata serial-port-enable=true
     deploy
     if [[ "$WEB" == true ]]; then web_access; fi
     ;;

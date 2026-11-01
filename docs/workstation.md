@@ -234,10 +234,10 @@ scripts/workstation destroy main
 
 `create` and `recover` build the base NixOS image, so they require a Linux
 machine with Nix and flakes; run them from this repository. Other commands work
-from any machine with `gcloud`. Override `--project`, `--zone`,
-`--machine-type`, and `--boot-disk-size` per command. `create` leaves existing
-machines unchanged; `start` preserves the disk; `destroy` asks for confirmation
-(the GitHub action passes `--yes`).
+from any machine with `gcloud`. Override `--project`, `--zone`, `--machine-type`, and `--boot-disk-size` per
+command. The default name is `main`; `create` refuses to overwrite an existing
+workstation, so destroy it first. `start` preserves the disk; `destroy` asks for
+confirmation (the GitHub action passes `--yes`).
 
 `list` and the GitHub Actions summary include the browser URL and Secret Manager
 password links for each workstation with browser access enabled.
