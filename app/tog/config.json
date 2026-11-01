@@ -1,0 +1,7 @@
+{
+  "env": true,
+  "environment": true,
+  "default": true,
+  "packages": ["nix-bin", "direnv"],
+  "setup": "app/tog/setup.sh"
+}

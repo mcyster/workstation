@@ -22,7 +22,7 @@ Commands: create, configure, idle-shutdown, opencode, opencode-link, start, stop
 web-terminal enables the code-server browser editor; opencode enables the opencode web UI.
 Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps password.
 opencode-link prints a one-time pairing link that signs the browser into opencode web.
-configure applies one or more environment apps (comma-separated) from the apps.json app registry, in order.
+configure applies one or more environment apps (comma-separated) from app/*/config.json, in order.
 idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
 Default name: main. Default machine type: e2-standard-2.
 Stop retains disk; destroy permanently deletes disk.
@@ -103,34 +103,55 @@ ensure_setup() {
   gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown" >/dev/null || die 'Could not install idle shutdown'
   gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
 }
-APPS_JSON="$ROOT/apps.json"
+app_dir() { printf '%s\n' "$ROOT/app/$1"; }
+app_config() { printf '%s\n' "$ROOT/app/$1/config.json"; }
+app_names() {
+  # Apps are the directories under app/ that carry a config.json.
+  local dir
+  for dir in "$ROOT"/app/*/; do
+    if [[ -d "$dir" && -f "$dir/config.json" ]]; then
+      printf '%s\n' "$(basename "$dir")"
+    fi
+  done
+}
 app_env_names() {
   # Apps with an env file: each maps to a fixed GitHub secret WORKSTATION_ENV_<APP>
   # whose value is written to ~/.env.<app> on the workstation.
-  jq -r 'to_entries[] | select(.value.env == true) | .key' "$APPS_JSON"
+  local app
+  for app in $(app_names); do
+    jq -e '.env == true' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
+  done
 }
 app_service_apps() {
   # Apps that run as a supervised service behind Caddy.
-  jq -r 'to_entries[] | select(.value.service != null) | .key' "$APPS_JSON"
+  local app
+  for app in $(app_names); do
+    jq -e '.service != null' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
+  done
 }
 app_environment_names() {
   # Apps selectable as a configurable environment (have a setup script).
-  jq -r 'to_entries[] | select(.value.environment == true) | .key' "$APPS_JSON"
+  local app
+  for app in $(app_names); do
+    jq -e '.environment == true' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
+  done
 }
 default_environments() {
   # Environment apps loaded by default when none are specified.
-  jq -r 'to_entries[] | select(.value.environment == true and .value.default == true) | .key' "$APPS_JSON"
+  local app
+  for app in $(app_names); do
+    jq -e '.environment == true and .default == true' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
+  done
 }
 app_packages() {
-  # Base packages plus per-app packages declared in apps.json.
-  jq -r '.packages[]? // empty' "$APPS_JSON"
+  # Required system packages declared by the given apps.
   local app
   for app in "$@"; do
-    jq -r --arg app "$app" '.[$app].packages[]? // empty' "$APPS_JSON"
+    jq -r '.packages[]? // empty' "$(app_config "$app")"
   done
 }
 ensure_app_packages() {
-  # Idempotently install apt packages declared for the base and the given apps.
+  # Idempotently install required system packages for the given apps.
   # gh needs the GitHub CLI apt repository, set up here when it is declared.
   local app pkgs=() needs_gh=false p
   mapfile -t pkgs < <(app_packages "$@")
@@ -163,10 +184,10 @@ GH
   )
 }
 app_service_field() {
-  jq -r --arg app "$1" --arg field "$2" '.[$app].service[$field] // empty' "$APPS_JSON"
+  jq -r --arg field "$2" '.service[$field] // empty' "$(app_config "$1")"
 }
 app_setup_path() {
-  jq -r --arg app "$1" '.[$app].setup // empty' "$APPS_JSON"
+  jq -r '.setup // empty' "$(app_config "$1")"
 }
 tool_env_var() {
   printf 'WORKSTATION_ENV_%s\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
@@ -302,7 +323,7 @@ enable_browser_app() {
   user="$(app_service_field "$app" "user")"
   workdir="$(app_service_field "$app" "working_dir")"
   path="$(app_service_field "$app" "path")"
-  exec_line="$(jq -r --arg app "$app" '.[$app].service.exec | join(" ")' "$APPS_JSON")"
+  exec_line="$(jq -r '.service.exec | join(" ")' "$(app_config "$app")")"
 
   # Per-app install/config (binary, files) runs first, as root.
   setup_script="$ROOT/app/$app/setup.sh"

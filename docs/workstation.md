@@ -106,7 +106,7 @@ SSH keys are managed by gcloud. Once `config-ssh` has run, standard `ssh`, `scp`
 
 ## Apps
 
-Workstations are described by a declarative app registry in `apps.json`. Each app name maps to optional capabilities:
+Workstations are described by a declarative app registry: one `config.json` per app under `app/`. Each app declares optional capabilities:
 
 - **`env`** — a `.env` file: the repository secret `WORKSTATION_ENV_<APP>` (value = file content) is written to `~/.env.<app>` (0600) and sourced before setup runs.
 - **`service`** — a supervised browser app: systemd unit, port, and Caddy site ([Browser access](#browser-access)) generated from those fields.
