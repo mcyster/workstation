@@ -81,20 +81,18 @@ jobs:
             echo "- Action: $ACTION"
             echo "- Project: $PROJECT"
             echo "- Zone: $ZONE"
-            sed -n 's/^web terminal: /- Browser: /p' output.txt
-            sed -n 's/^password: /- Password: /p' output.txt
             echo '### Machines'
-            echo '| Name | Status | Machine type | Zone | IP | Web terminal | OpenCode | Password |'
+            echo '| Name | Status | Machine type | Zone | IP | Password | Web terminal | OpenCode |'
             echo '| --- | --- | --- | --- | --- | --- | --- | --- |'
             while IFS=, read -r machine status machine_type zone ip web_terminal opencode password; do
               [[ -n "$machine" ]] || continue
+              password_link='—'
               web_terminal_link='—'
               opencode_link='—'
-              password_link='—'
+              [[ -z "$password" ]] || password_link="[Secret Manager]($password)"
               [[ -z "$web_terminal" ]] || web_terminal_link="[Open]($web_terminal)"
               [[ -z "$opencode" ]] || opencode_link="[Open]($opencode)"
-              [[ -z "$password" ]] || password_link="[Secret Manager]($password)"
-              echo "| $machine | $status | $machine_type | $zone | $ip | $web_terminal_link | $opencode_link | $password_link |"
+              echo "| $machine | $status | $machine_type | $zone | $ip | $password_link | $web_terminal_link | $opencode_link |"
             done < <(bash scripts/workstation list --project "$PROJECT" || true)
           } >> "$GITHUB_STEP_SUMMARY"
   discover_environment:
