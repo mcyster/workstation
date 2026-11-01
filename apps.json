@@ -1,0 +1,27 @@
+{
+  "code": {
+    "env": true,
+    "service": {
+      "port": 8443,
+      "upstream": "127.0.0.1:8080",
+      "user": "developer",
+      "working_dir": "/home/developer",
+      "exec": ["/usr/bin/code-server", "--config", "/home/developer/.config/code-server/config.yaml"]
+    }
+  },
+  "opencode": {
+    "env": true,
+    "service": {
+      "port": 8444,
+      "upstream": "127.0.0.1:4096",
+      "user": "developer",
+      "working_dir": "/home/developer",
+      "exec": ["/home/developer/.opencode/bin/opencode", "serve", "--service", "--hostname", "127.0.0.1", "--port", "4096"]
+    }
+  },
+  "tog": {
+    "env": true,
+    "environment": true,
+    "setup": "app/tog/setup.sh"
+  }
+}

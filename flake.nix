@@ -18,7 +18,7 @@
         in
         {
           default = pkgs.mkShell {
-            packages = [ pkgs.google-cloud-sdk pkgs.gh ];
+            packages = [ pkgs.google-cloud-sdk pkgs.gh pkgs.jq ];
 
             shellHook = ''
               if root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null)"; then

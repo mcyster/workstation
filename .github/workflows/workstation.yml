@@ -24,7 +24,7 @@ on:
         type: boolean
         default: true
       environment:
-        description: Comma-separated environments from environments/NAME.sh to configure, in order
+        description: Comma-separated environment apps from apps.json to configure, in order
         type: string
         required: false
 permissions:
@@ -103,7 +103,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       environments: ${{ steps.secrets.outputs.environments }}
-      secrets: ${{ steps.secrets.outputs.secrets }}
     steps:
       - uses: actions/checkout@v4
       - name: Read environment requirements
@@ -120,35 +119,22 @@ jobs:
           for name in "${candidate_names[@]}"; do
             [[ -n "$name" ]] || continue
             [[ "$name" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "::error::Invalid environment name: $name"; exit 1; }
+            jq -e --arg app "$name" '.[$app].environment == true' apps.json >/dev/null 2>&1 || { echo "::error::$name is not a configurable environment app"; exit 1; }
+            setup="$(jq -r --arg app "$name" '.[$app].setup // empty' apps.json)"
+            [[ -n "$setup" && -f "$setup" ]] || { echo "::error::No setup script for app $name"; exit 1; }
             for seen in "${environment_names[@]}"; do [[ "$seen" == "$name" ]] && continue 2; done
             environment_names+=("$name")
           done
           ((${#environment_names[@]})) || { echo '::error::No environments given'; exit 1; }
 
-          secret_arrays_json=()
-          for environment_name in "${environment_names[@]}"; do
-            script="environments/$environment_name.sh"
-            [[ -f "$script" ]] || { echo "::error::Environment script not found: $script"; exit 1; }
-            mapfile -t declared_secrets < <(sed -nE 's/^#[[:space:]]+workstation-secret:[[:space:]]+([A-Z_][A-Z0-9_]*)[[:space:]]*$/\1/p' "$script" | sort -u)
-            ((${#declared_secrets[@]} <= 16)) || { echo "::error::$environment_name declares more than 16 secrets"; exit 1; }
-            while ((${#declared_secrets[@]} < 16)); do declared_secrets+=(''); done
-            secret_array='['
-            separator=''
-            for secret in "${declared_secrets[@]}"; do secret_array+="${separator}\"${secret}\""; separator=','; done
-            secret_array+=']'
-            secret_arrays_json+=("$secret_array")
-          done
-
-          environment_list_json='['; environment_secrets='{'
+          environment_list_json='['
           separator=''
           for index in "${!environment_names[@]}"; do
             environment_list_json+="${separator}\"${environment_names[$index]}\""
-            environment_secrets+="${separator}\"${environment_names[$index]}\": ${secret_arrays_json[$index]}"
             separator=','
           done
-          environment_list_json+=']'; environment_secrets+='}'
+          environment_list_json+=']'
           printf 'environments=%s\n' "$environment_list_json" >> "$GITHUB_OUTPUT"
-          printf 'secrets=%s\n' "$environment_secrets" >> "$GITHUB_OUTPUT"
   configure:
     needs: [workstation, discover_environment]
     if: ${{ always() && needs.workstation.result == 'success' && needs.discover_environment.result == 'success' }}
@@ -183,49 +169,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - name: Configure environment
         shell: bash
-        env:
-          WORKSTATION_SECRET_1_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][0] }}
-          WORKSTATION_SECRET_1_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][0]] }}
-          WORKSTATION_SECRET_2_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][1] }}
-          WORKSTATION_SECRET_2_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][1]] }}
-          WORKSTATION_SECRET_3_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][2] }}
-          WORKSTATION_SECRET_3_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][2]] }}
-          WORKSTATION_SECRET_4_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][3] }}
-          WORKSTATION_SECRET_4_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][3]] }}
-          WORKSTATION_SECRET_5_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][4] }}
-          WORKSTATION_SECRET_5_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][4]] }}
-          WORKSTATION_SECRET_6_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][5] }}
-          WORKSTATION_SECRET_6_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][5]] }}
-          WORKSTATION_SECRET_7_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][6] }}
-          WORKSTATION_SECRET_7_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][6]] }}
-          WORKSTATION_SECRET_8_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][7] }}
-          WORKSTATION_SECRET_8_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][7]] }}
-          WORKSTATION_SECRET_9_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][8] }}
-          WORKSTATION_SECRET_9_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][8]] }}
-          WORKSTATION_SECRET_10_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][9] }}
-          WORKSTATION_SECRET_10_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][9]] }}
-          WORKSTATION_SECRET_11_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][10] }}
-          WORKSTATION_SECRET_11_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][10]] }}
-          WORKSTATION_SECRET_12_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][11] }}
-          WORKSTATION_SECRET_12_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][11]] }}
-          WORKSTATION_SECRET_13_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][12] }}
-          WORKSTATION_SECRET_13_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][12]] }}
-          WORKSTATION_SECRET_14_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][13] }}
-          WORKSTATION_SECRET_14_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][13]] }}
-          WORKSTATION_SECRET_15_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][14] }}
-          WORKSTATION_SECRET_15_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][14]] }}
-          WORKSTATION_SECRET_16_NAME: ${{ fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][15] }}
-          WORKSTATION_SECRET_16_VALUE: ${{ secrets[fromJson(needs.discover_environment.outputs.secrets)[matrix.environment][15]] }}
         run: |
-          for index in {1..16}; do
-            name_variable="WORKSTATION_SECRET_${index}_NAME"
-            value_variable="WORKSTATION_SECRET_${index}_VALUE"
-            name="${!name_variable}"
-            [[ -n "$name" ]] || continue
-            value="${!value_variable}"
-            if [[ -z "$value" ]]; then echo "::error::GitHub Environment secret is not configured: $name"; exit 1; fi
-            export "$name=$value"
-          done
           bash scripts/workstation configure "$NAME" \
             --project "$PROJECT" \
             --zone "$ZONE" \

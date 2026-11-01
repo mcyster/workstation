@@ -90,12 +90,12 @@ Run these before opening a pull request:
 
 ```sh
 # every Bash script
-bash -n scripts/workstation infra/workstation/* environments/*.sh
+bash -n scripts/workstation app/*/setup.sh infra/workstation/*
 
 # every Bash script
 shellcheck scripts/workstation
+shellcheck app/*/setup.sh
 shellcheck infra/workstation/*
-shellcheck environments/*.sh
 
 # every workflow
 actionlint .github/workflows/*.yml

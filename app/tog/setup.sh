@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Secrets for this environment come from the materialized tool env file
-# ~/.env.tog (Workstation secret WORKSTATION_ENV_TOG), sourced by configure.
-# workstation-app: opencode
-
+# Configure the tog project on the workstation.
+# Runs as developer; tool env files (~/.env.tog etc.) are materialized and
+# sourced by the workstation CLI before this runs.
 set -euo pipefail
 
 checkout="$HOME/tog/main"
