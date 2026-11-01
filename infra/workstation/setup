@@ -10,7 +10,16 @@ flock 9
 [[ ! -f "$MARKER" ]] || exit 0
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >/dev/null
-apt-get install -y --no-install-recommends sudo curl git ca-certificates direnv >/dev/null
+apt-get install -y --no-install-recommends sudo curl git ca-certificates direnv gnupg >/dev/null
+if ! command -v gh >/dev/null; then
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
+    "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list
+  apt-get update >/dev/null
+  apt-get install -y --no-install-recommends gh >/dev/null
+fi
 id "$USER_NAME" >/dev/null 2>&1 || useradd -m -s /bin/bash "$USER_NAME"
 usermod -aG sudo "$USER_NAME"
 if [[ ! -d /nix/store ]]; then
