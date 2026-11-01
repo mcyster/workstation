@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+# Provision the static Google Cloud infrastructure for the workstation.
+#
+# This is the single, idempotent source of truth for project-level resources:
+# required APIs, the keyless GitHub Actions identity, IAM, the shared image
+# bucket, and the browser-access firewall rule. It is run through the
+# repository's Infra GitHub Actions workflow (plan/check on PRs, apply on
+# merge), or once manually while bootstrapping a new project.
+#
+# The workstation CLI creates and destroys instances only; it never manages
+# these resources.
+set -euo pipefail
+
+readonly PROGRAM="${0##*/}"
+readonly DEFAULT_REPOSITORY="mcyster/workstation"
+readonly DEFAULT_ZONE="us-central1-a"
+readonly WORKLOAD_IDENTITY_POOL="workstation-actions"
+readonly WORKLOAD_IDENTITY_PROVIDER="github"
+readonly SECRET_WRITER_ROLE_ID="workstationSecretWriter"
+readonly IMAGE_BUCKET_PREFIX="workstation-images"
+readonly WEB_FIREWALL_RULE="workstation-web"
+readonly WEB_FIREWALL_TAG="workstation-web"
+readonly CHECK=false
+
+PROJECT=""
+REPOSITORY="$DEFAULT_REPOSITORY"
+ZONE="$DEFAULT_ZONE"
+MODE="apply"
+
+usage() {
+  cat <<EOF
+Usage: $PROGRAM --project PROJECT [--repo OWNER/REPO] [--check]
+
+Provision the static Google Cloud infrastructure for Workstation without
+storing a service-account key.
+
+Options:
+  --project PROJECT   Google Cloud project ID (required)
+  --repo OWNER/REPO  GitHub repository allowed to authenticate
+                     (default: $DEFAULT_REPOSITORY)
+  --zone ZONE        Compute zone default (default: $DEFAULT_ZONE)
+  --check            Verify required infrastructure exists without creating it;
+                     exits nonzero if anything is missing
+  -h, --help         Show this help message
+EOF
+}
+
+usage_error() {
+  printf '%s: %s\n\n' "$PROGRAM" "$1" >&2
+  usage >&2
+  exit 2
+}
+
+parse_arguments() {
+  while (($#)); do
+    case "$1" in
+      --project)
+        (($# >= 2)) || usage_error "Missing value for $1"
+        PROJECT="$2"
+        shift 2
+        ;;
+      --project=*)
+        PROJECT="${1#*=}"
+        shift
+        ;;
+      --repo)
+        (($# >= 2)) || usage_error "Missing value for $1"
+        REPOSITORY="$2"
+        shift 2
+        ;;
+      --repo=*)
+        REPOSITORY="${1#*=}"
+        shift
+        ;;
+      --zone)
+        (($# >= 2)) || usage_error "Missing value for $1"
+        ZONE="$2"
+        shift 2
+        ;;
+      --zone=*)
+        ZONE="${1#*=}"
+        shift
+        ;;
+      --check)
+        MODE="check"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage_error "Unknown argument: $1"
+        ;;
+    esac
+  done
+
+  [[ -n "$PROJECT" ]] || usage_error "--project is required"
+  [[ "$REPOSITORY" == */* ]] || usage_error "--repo must be OWNER/REPO"
+}
+
+# --- Shared state ---------------------------------------------------------
+
+PROJECT_NUMBER=""
+GITHUB_SERVICE_ACCOUNT=""
+COMPUTE_SERVICE_ACCOUNT=""
+WORKLOAD_IDENTITY_PREFIX=""
+SECRET_WRITER_ROLE=""
+IMAGE_BUCKET=""
+REGION="${ZONE%-*}"
+
+load_project_context() {
+  PROJECT_NUMBER="$(
+    gcloud projects describe "$PROJECT" --format='value(projectNumber)'
+  )"
+  GITHUB_SERVICE_ACCOUNT="github-actions@$PROJECT.iam.gserviceaccount.com"
+  COMPUTE_SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+  WORKLOAD_IDENTITY_PREFIX="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL"
+  SECRET_WRITER_ROLE="projects/$PROJECT/roles/$SECRET_WRITER_ROLE_ID"
+  IMAGE_BUCKET="$IMAGE_BUCKET_PREFIX-$PROJECT"
+}
+
+confirm() {
+  [[ "$MODE" == apply ]]
+}
+say() {
+  if confirm; then
+    printf '%s\n' "$*"
+  else
+    printf '%s (check mode)\n' "$*"
+  fi
+}
+
+# Report a missing resource. In apply mode this is informational until the
+# end; in check mode it means the repository's infrastructure is missing.
+declare -a MISSING=()
+missing() {
+  MISSING+=("$*")
+  printf 'missing: %s\n' "$*" >&2
+}
+
+# --- API enablement ------------------------------------------------------
+
+REQUIRED_APIS=(
+  compute.googleapis.com
+  iam.googleapis.com
+  iamcredentials.googleapis.com
+  secretmanager.googleapis.com
+  storage.googleapis.com
+  sts.googleapis.com
+)
+
+enable_apis() {
+  for api in "${REQUIRED_APIS[@]}"; do
+    if gcloud services list --project "$PROJECT" --enabled \
+      --filter="config.name=$api" --format='value(config.name)' \
+      | grep -qx "$api"; then
+      say "api ok: $api"
+    elif confirm; then
+      say "enabling api: $api"
+      gcloud services enable "$api" --project "$PROJECT" >/dev/null
+    else
+      missing "api $api"
+    fi
+  done
+}
+
+# --- Identity and IAM ------------------------------------------------------
+
+configure_github_service_account() {
+  if gcloud iam service-accounts describe "$GITHUB_SERVICE_ACCOUNT" --project "$PROJECT" >/dev/null 2>&1; then
+    say "service account ok: $GITHUB_SERVICE_ACCOUNT"
+  elif confirm; then
+    say "creating service account: $GITHUB_SERVICE_ACCOUNT"
+    gcloud iam service-accounts create github-actions \
+      --project "$PROJECT" \
+      --display-name "Workstation GitHub Actions"
+  else
+    missing "service account $GITHUB_SERVICE_ACCOUNT"
+    return
+  fi
+}
+
+configure_workload_identity() {
+  if gcloud iam workload-identity-pools describe "$WORKLOAD_IDENTITY_POOL" \
+    --location global --project "$PROJECT" >/dev/null 2>&1; then
+    say "identity pool ok: $WORKLOAD_IDENTITY_POOL"
+  elif confirm; then
+    say "creating identity pool: $WORKLOAD_IDENTITY_POOL"
+    gcloud iam workload-identity-pools create "$WORKLOAD_IDENTITY_POOL" \
+      --location global --project "$PROJECT" >/dev/null
+  else
+    missing "identity pool $WORKLOAD_IDENTITY_POOL"
+  fi
+
+  if gcloud iam workload-identity-pools providers describe "$WORKLOAD_IDENTITY_PROVIDER" \
+    --workload-identity-pool "$WORKLOAD_IDENTITY_POOL" \
+    --location global --project "$PROJECT" >/dev/null 2>&1; then
+    say "identity provider ok: $WORKLOAD_IDENTITY_PROVIDER"
+  elif confirm; then
+    say "creating identity provider: $WORKLOAD_IDENTITY_PROVIDER"
+    gcloud iam workload-identity-pools providers create-oidc "$WORKLOAD_IDENTITY_PROVIDER" \
+      --workload-identity-pool "$WORKLOAD_IDENTITY_POOL" \
+      --location global --project "$PROJECT" \
+      --issuer-uri https://token.actions.githubusercontent.com \
+      --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository" \
+      --attribute-condition "assertion.repository == '$REPOSITORY'" >/dev/null
+  else
+    missing "identity provider $WORKLOAD_IDENTITY_PROVIDER"
+  fi
+}
+
+ensure_project_iam_binding() {
+  local description="$1" member="$2" role="$3"
+  if gcloud projects get-iam-policy "$PROJECT" --flatten='bindings[].members' \
+    --format='value(bindings.role)' --filter="bindings.members=$member" 2>/dev/null \
+    | grep -qx "$role"; then
+    say "iam ok: $role (${member##*:})"
+  elif confirm; then
+    say "granting $role to ${member##*:}"
+    gcloud projects add-iam-policy-binding "$PROJECT" \
+      --member="$member" --role="$role" >/dev/null
+  else
+    missing "iam $role on $member"
+  fi
+}
+
+ensure_sa_iam_binding() {
+  local description="$1" account="$2" member="$3" role="$4"
+  if gcloud iam service-accounts get-iam-policy "$account" --project "$PROJECT" \
+    --flatten='bindings[].members' \
+    --format='value(bindings.role)' --filter="bindings.members=$member" 2>/dev/null \
+    | grep -qx "$role"; then
+    say "iam ok: $role on $account (${member##*:})"
+  elif confirm; then
+    say "granting $role on $account to ${member##*:}"
+    gcloud iam service-accounts add-iam-policy-binding "$account" \
+      --project "$PROJECT" --member="$member" --role="$role" >/dev/null
+  else
+    missing "iam $role on $account for $member"
+  fi
+}
+
+configure_identity_iam() {
+  ensure_project_iam_binding \
+    "compute admin for GitHub Actions" \
+    "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
+    "roles/compute.admin"
+
+  # Allow the workflow to act as the default Compute Engine service account
+  # when creating instances and computing their SSH access.
+  ensure_sa_iam_binding \
+    "access to the Compute Engine service account" \
+    "$COMPUTE_SERVICE_ACCOUNT" \
+    "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
+    "roles/iam.serviceAccountUser"
+
+  ensure_sa_iam_binding \
+    "workload identity for the repository" \
+    "$GITHUB_SERVICE_ACCOUNT" \
+    "principalSet://iam.googleapis.com/$WORKLOAD_IDENTITY_PREFIX/attribute.repository/$REPOSITORY" \
+    "roles/iam.workloadIdentityUser"
+}
+
+# --- Secret Manager -------------------------------------------------------
+
+configure_password_secret_access() {
+  if gcloud iam roles describe "$SECRET_WRITER_ROLE_ID" --project "$PROJECT" >/dev/null 2>&1; then
+    say "custom role ok: $SECRET_WRITER_ROLE_ID"
+  elif confirm; then
+    say "creating custom role: $SECRET_WRITER_ROLE_ID"
+    gcloud iam roles create "$SECRET_WRITER_ROLE_ID" \
+      --project "$PROJECT" \
+      --title "Workstation Secret Writer" \
+      --description "Create workstation password secrets and append versions" \
+      --permissions "secretmanager.secrets.create,secretmanager.secrets.get,secretmanager.versions.add" \
+      --stage GA >/dev/null
+  else
+    missing "custom role $SECRET_WRITER_ROLE_ID"
+  fi
+
+  ensure_project_iam_binding \
+    "password secret writer for GitHub Actions" \
+    "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
+    "$SECRET_WRITER_ROLE"
+}
+
+# --- Image bucket ---------------------------------------------------------
+
+configure_image_bucket() {
+  if gsutil ls -b "gs://$IMAGE_BUCKET" >/dev/null 2>&1; then
+    say "bucket ok: $IMAGE_BUCKET"
+  elif confirm; then
+    say "creating bucket: $IMAGE_BUCKET"
+    gsutil mb -p "$PROJECT" -c standard -l "$REGION" "gs://$IMAGE_BUCKET" >/dev/null
+  else
+    missing "bucket gs://$IMAGE_BUCKET"
+  fi
+
+  if gsutil iam get "gs://$IMAGE_BUCKET" 2>/dev/null \
+    | grep -q "serviceAccount:$GITHUB_SERVICE_ACCOUNT"; then
+    say "bucket iam ok: $GITHUB_SERVICE_ACCOUNT on $IMAGE_BUCKET"
+  elif confirm; then
+    say "granting bucket access: $GITHUB_SERVICE_ACCOUNT on $IMAGE_BUCKET"
+    gsutil iam ch "serviceAccount:$GITHUB_SERVICE_ACCOUNT:objectAdmin" "gs://$IMAGE_BUCKET" >/dev/null
+  else
+    missing "bucket iam for $GITHUB_SERVICE_ACCOUNT on $IMAGE_BUCKET"
+  fi
+}
+
+# --- Browser-access firewall ------------------------------------------------
+
+configure_web_firewall() {
+  if gcloud compute firewall-rules describe "$WEB_FIREWALL_RULE" \
+    --project "$PROJECT" >/dev/null 2>&1; then
+    say "firewall ok: $WEB_FIREWALL_RULE"
+  elif confirm; then
+    say "creating firewall rule: $WEB_FIREWALL_RULE"
+    gcloud compute firewall-rules create "$WEB_FIREWALL_RULE" --project "$PROJECT" \
+      --allow tcp:443 --target-tags "$WEB_FIREWALL_TAG" \
+      --description "Workstation browser access (HTTPS reverse proxy)" >/dev/null
+  else
+    missing "firewall rule $WEB_FIREWALL_RULE"
+  fi
+}
+
+# --- Done -------------------------------------------------------------------
+
+print_github_settings() {
+  cat <<EOF
+GitHub Repository Variables
+  WORKSTATION_GCLOUD_PROJECT: $PROJECT
+  WORKSTATION_GCLOUD_ZONE: $ZONE (optional)
+
+GitHub Repository Secrets
+  WORKSTATION_GCLOUD_SERVICE_ACCOUNT: $GITHUB_SERVICE_ACCOUNT
+  WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER: $WORKLOAD_IDENTITY_PREFIX/providers/$WORKLOAD_IDENTITY_PROVIDER
+EOF
+}
+
+main() {
+  parse_arguments "$@"
+  load_project_context
+  enable_apis
+  configure_github_service_account
+  configure_workload_identity
+  configure_identity_iam
+  configure_password_secret_access
+  configure_image_bucket
+  configure_web_firewall
+
+  if ((${#MISSING[@]})); then
+    printf 'missing Google Cloud infrastructure:\n' >&2
+    printf '  - %s\n' "${MISSING[@]}" >&2
+    printf 'Apply it by merging a change through the Infra workflow (or run this script without --check).\n' >&2
+    exit 1
+  fi
+
+  printf 'infrastructure: %s (%s)\n' "$PROJECT" "$MODE"
+  if [[ "$MODE" == apply ]]; then
+    print_github_settings
+  fi
+}
+
+main "$@"

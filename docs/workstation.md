@@ -113,16 +113,18 @@ owns the repository, then run:
 git clone https://github.com/OWNER/workstation.git
 cd workstation
 
-bash infra/workstation/github-gcloud-identity \
+bash infra/workstation/apply-infra \
   --project PROJECT \
   --repo OWNER/workstation
 ```
 
-The script enables the required APIs (including Storage, which holds the base
-image) and creates the service account, IAM, identity provider, a storage
-bucket for NixOS base images, and a limited role for writing password secrets.
-It prints values for `WORKSTATION_GCLOUD_SERVICE_ACCOUNT` and
-`WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER`.
+The script provisions the static Google Cloud infrastructure and is the source
+of truth for it: required APIs, the service account, IAM, a storage bucket for
+NixOS base images, the password-secret role, and the browser-access firewall
+rule. It is idempotent. After this one-time bootstrap, all infrastructure
+changes go through the repository — reviewed in pull requests and applied by the
+**Infra** GitHub Actions workflow — so nothing is ever provisioned by ad-hoc
+commands or hidden inside instance lifecycle scripts.
 
 In GitHub, open **Repository → Settings → Secrets and variables → Actions**. Add
 these repository settings:
@@ -294,14 +296,16 @@ a known-good image to boot from.
 - `nixos/configuration.nix` — the complete workstation (enables extensions).
 - `nixos/extensions/` — optional workstation modules.
 - `scripts/workstation` — instance lifecycle, images, SSH, password rotation.
+- `infra/workstation/apply-infra` — provisions the static Google Cloud
+  infrastructure (APIs, identity, IAM, image bucket, firewall rule).
 - `infra/workstation/deploy` — pushes the flake to `/etc/nixos` on the instance
   and runs `nixos-rebuild switch`; runtime credentials in `/var/lib/workstation`
   are preserved.
 - `infra/workstation/web-access` — rotates website and recovery passwords.
-- `infra/workstation/github-gcloud-identity` — workload identity, service
-  account, image bucket, and Secret Manager setup.
-- `.github/workflows/workstation.yml` — manual action using Workload Identity
-  Federation.
+- `.github/workflows/infra.yml` — applies or checks infrastructure on PRs and
+  merges, so infrastructure changes go through code review.
+- `.github/workflows/workstation.yml` — manual workstation action using Workload
+  Identity Federation.
 
 Instances are named `workstation-NAME`, carry the label
 `managed-workstation=true`, and are independent of tog and any other project.
