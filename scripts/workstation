@@ -6,6 +6,7 @@ NAME=main
 PROJECT=""
 ZONE=""
 MACHINE_TYPE=e2-standard-2
+BOOT_DISK_GB=64
 IMAGE_PROJECT=ubuntu-os-cloud
 IMAGE_FAMILY=ubuntu-2404-lts-amd64
 ENVIRONMENT=""
@@ -387,6 +388,7 @@ case "$ACTION" in
         --machine-type "$MACHINE_TYPE" \
         --image-project "$IMAGE_PROJECT" \
         --image-family "$IMAGE_FAMILY" \
+        --boot-disk-size "${BOOT_DISK_GB}GB" \
         --labels managed-workstation=true \
         --metadata-from-file="startup-script=$ROOT/infra/workstation/setup"
     else echo "$INSTANCE already exists"; fi
