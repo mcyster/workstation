@@ -163,9 +163,9 @@ Secrets are stored at **repository level**; every `configure` job sees them, so 
 Keep the raw values (and any repository holding them, such as a private `secrets` repo) only on your machine, never on a workstation. Upload them to GitHub repository secrets with:
 
 ```sh
-scripts/push-environment-secrets                # all tools, repo-level
-scripts/push-environment-secrets opencode tog  # just those tools
-scripts/push-environment-secrets --dir ~/secrets   # read ~/secrets/.env.<tool>
+scripts/workstation-secrets-push                # all tools, repo-level
+scripts/workstation-secrets-push opencode tog  # just those tools
+scripts/workstation-secrets-push --dir ~/secrets   # read ~/secrets/.env.<tool>
 ```
 
 The tool reads `~/.env.<TOOL>` (or `--dir`/`.env.<TOOL>`), uploads only files whose fingerprint changed (so repeated runs are no-ops), never prints values, and requires confirmation. It needs the GitHub CLI (`gh`), included in the development shell.
