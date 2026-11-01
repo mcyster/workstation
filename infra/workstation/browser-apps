@@ -94,6 +94,7 @@ After=network-online.target
 User=$BROWSER_APP_USER
 WorkingDirectory=$BROWSER_APP_WORKDIR
 Environment=HOME=$BROWSER_APP_WORKDIR
+Environment=PATH=${BROWSER_APP_PATH:-/nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
 $env_file_line
 ExecStart=$BROWSER_APP_EXEC
 Restart=on-failure

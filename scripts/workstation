@@ -293,7 +293,7 @@ enable_browser_app() {
   # ROTATE=true or a new workstation forces a fresh password. An explicit
   # PASSWORD is used for all apps in one rotation; the caller stores it.
   local app="$1" rotate_mode="${2:-false}" password="${3:-}"
-  local port upstream user workdir exec_line generated_value=false setup_script
+  local port upstream user workdir path exec_line generated_value=false setup_script
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
   ensure_browser_app_tag "$app"
@@ -301,6 +301,7 @@ enable_browser_app() {
   upstream="$(app_service_field "$app" "upstream")"
   user="$(app_service_field "$app" "user")"
   workdir="$(app_service_field "$app" "working_dir")"
+  path="$(app_service_field "$app" "path")"
   exec_line="$(jq -r --arg app "$app" '.[$app].service.exec | join(" ")' "$APPS_JSON")"
 
   # Per-app install/config (binary, files) runs first, as root.
@@ -318,11 +319,11 @@ enable_browser_app() {
   fi
   if [[ -n "$password" ]]; then
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APPS_PASSWORD='$password' BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APPS_PASSWORD='$password' BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PATH='$path' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   else
     # Reuse the existing bcrypt hash; just make sure the app is behind Caddy.
     gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
+      --command "sudo BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PATH='$path' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
   fi
   if ! gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /etc/workstation/browser-apps' >/dev/null 2>&1; then
     die 'Browser app install did not complete on the workstation'
