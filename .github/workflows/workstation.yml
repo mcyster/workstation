@@ -64,8 +64,7 @@ jobs:
         shell: bash
         run: |
           if [[ "$ACTION" == configure ]]; then
-            if [[ -z "$ENVIRONMENT" ]]; then echo '::error::configure requires an environment'; exit 1; fi
-            echo "environment: $ENVIRONMENT" > output.txt
+            echo "environment: ${ENVIRONMENT:-<default apps>}" > output.txt
           else
             args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
             if [[ "$ACTION" == create ]]; then
@@ -99,7 +98,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
   discover_environment:
     needs: workstation
-    if: ${{ always() && needs.workstation.result == 'success' && inputs.environment != '' && (inputs.action == 'create' || inputs.action == 'configure') }}
+    if: ${{ always() && needs.workstation.result == 'success' && (inputs.action == 'create' || inputs.action == 'configure') }}
     runs-on: ubuntu-latest
     outputs:
       environments: ${{ steps.secrets.outputs.environments }}
