@@ -90,7 +90,7 @@ Run these before opening a pull request:
 
 ```sh
 # every Bash script
-bash -n scripts/workstation app/*/setup.sh                              infra/workstation/*
+bash -n scripts/workstation app/*/setup.sh infra/workstation/*
 
 # every Bash script
 shellcheck scripts/workstation
