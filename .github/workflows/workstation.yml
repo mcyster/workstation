@@ -115,6 +115,9 @@ jobs:
           environment_input="${ENVIRONMENT//[, ]/ }"
           environment_input="${environment_input//$'\n'/ }"
           read -r -a candidate_names <<< "$environment_input"
+          if ((${#candidate_names[@]} == 0)); then
+            mapfile -t candidate_names < <(jq -r 'to_entries[] | select(.value.environment == true and .value.default == true) | .key' apps.json)
+          fi
           environment_names=()
           for name in "${candidate_names[@]}"; do
             [[ -n "$name" ]] || continue
