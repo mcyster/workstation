@@ -18,13 +18,14 @@ GITHUB_SERVICE_ACCOUNT=""
 COMPUTE_SERVICE_ACCOUNT=""
 WORKLOAD_IDENTITY_PREFIX=""
 SECRET_WRITER_ROLE=""
+IMAGE_BUCKET=""
 
 usage() {
   cat <<EOF
 Usage: $PROGRAM --project PROJECT [--repo OWNER/REPO]
 
-Configure GitHub Actions to manage Workstation resources in Google Cloud
-without storing a service-account key.
+Configure GitHub Actions to manage Workstation (NixOS) resources in Google
+Cloud without storing a service-account key.
 
 Options:
   --project PROJECT   Google Cloud project ID (required)
@@ -85,6 +86,7 @@ load_project_context() {
   COMPUTE_SERVICE_ACCOUNT="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
   WORKLOAD_IDENTITY_PREFIX="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL"
   SECRET_WRITER_ROLE="projects/$PROJECT/roles/$SECRET_WRITER_ROLE_ID"
+  IMAGE_BUCKET="workstation-images-$PROJECT"
 }
 
 enable_required_apis() {
@@ -93,8 +95,9 @@ enable_required_apis() {
     compute.googleapis.com
     iam.googleapis.com
     iamcredentials.googleapis.com
-    sts.googleapis.com
     secretmanager.googleapis.com
+    storage.googleapis.com
+    sts.googleapis.com
   )
 
   for api in "${apis[@]}"; do
@@ -193,6 +196,17 @@ configure_workload_identity() {
       --member "principalSet://iam.googleapis.com/$WORKLOAD_IDENTITY_PREFIX/attribute.repository/$REPOSITORY"
 }
 
+configure_image_bucket() {
+  # Shared bucket for NixOS base images, keyed by the image content hash so
+  # identical images are uploaded at most once.
+  if ! gsutil ls -b "gs://$IMAGE_BUCKET" >/dev/null 2>&1; then
+    gsutil mb -p "$PROJECT" -c standard -l "${DEFAULT_ZONE%-*}" "gs://$IMAGE_BUCKET" >/dev/null
+  fi
+
+  retry_iam_binding "granting image bucket access to GitHub Actions" \
+    gsutil iam ch "serviceAccount:$GITHUB_SERVICE_ACCOUNT:objectAdmin" "gs://$IMAGE_BUCKET"
+}
+
 configure_password_secret_access() {
   if gcloud iam roles describe "$SECRET_WRITER_ROLE_ID" --project "$PROJECT" >/dev/null 2>&1; then
     gcloud iam roles update "$SECRET_WRITER_ROLE_ID" \
@@ -235,6 +249,7 @@ main() {
   configure_github_service_account
   grant_compute_service_account_access
   configure_workload_identity
+  configure_image_bucket
   configure_password_secret_access
   print_github_settings
 }

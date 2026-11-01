@@ -1,31 +1,33 @@
 #!/usr/bin/env bash
 # Workstation command-line interface for Google Compute Engine.
+#
+# Creates and manages NixOS workstations. Creating a workstation builds the
+# minimal NixOS GCE base image from this repository's flake, uploads it to
+# Google Cloud, boots the instance from it, and then applies the full flake
+# configuration with a normal `nixos-rebuild switch`.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAME=main
 PROJECT=""
 ZONE=""
 MACHINE_TYPE=e2-standard-2
-BOOT_DISK_GB=64
-IMAGE_PROJECT=ubuntu-os-cloud
-IMAGE_FAMILY=ubuntu-2404-lts-amd64
-ENVIRONMENT=""
-ENVIRONMENTS=()
+BOOT_DISK_SIZE=100
 WEB=false
-OPENCODE=false
 YES=false
 ACTION=""
+SYSTEM="x86_64-linux"
+TAG=workstation-web
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
-       workstation create [NAME] [--machine-type TYPE] [--web-terminal|--opencode] [--environment NAME[,NAME...]]
-       workstation configure [NAME] --environment NAME[,NAME...]
-Commands: create, configure, idle-shutdown, opencode, opencode-link, start, stop, list, shell, config-ssh, web-terminal, destroy
-web-terminal enables the code-server browser editor; opencode enables the opencode web UI.
-Both are served by Caddy on https://IP:8443 and :8444 behind one browser-apps password.
-opencode-link prints a one-time pairing link that signs the browser into opencode web.
-configure applies one or more environment apps (comma-separated) from app/*/config.json, in order.
-idle-shutdown installs the auto-shutdown watchdog (also run automatically after setup).
-Default name: main. Default machine type: e2-standard-2.
+       workstation create [NAME] [--machine-type TYPE] [--boot-disk-size GB] [--web-terminal]
+       workstation configure [NAME]
+       workstation recover [NAME]
+Commands: create, configure, start, stop, list, shell, config-ssh, web-terminal, recover, destroy
+web-terminal sets up browser access and issues a new website and recovery password.
+configure re-applies the workstation flake (nixos-rebuild switch) to a running instance.
+create builds the base image (requires a Linux machine with Nix) and deploys the flake.
+recover boots a fresh instance from the base image with your original disk attached for rescue.
+Default name: main. Default machine type: e2-standard-2. Default boot disk: 100 GB.
 Stop retains disk; destroy permanently deletes disk.
 HELP
 }
@@ -33,15 +35,14 @@ die() { echo "workstation: $*" >&2; exit 1; }
 while (($#)); do
  case "$1" in
    -h|--help) usage; exit 0;;
-   --project|--zone|--machine-type|--environment) (($#>=2)) || die "Missing value for $1"; case "$1" in --project) PROJECT="$2";; --zone) ZONE="$2";; --machine-type) MACHINE_TYPE="$2";; --environment) ENVIRONMENT="$2";; esac; shift 2;;
+   --project|--zone|--machine-type|--boot-disk-size) (($#>=2)) || die "Missing value for $1"; case "$1" in --project) PROJECT="$2";; --zone) ZONE="$2";; --machine-type) MACHINE_TYPE="$2";; --boot-disk-size) BOOT_DISK_SIZE="$2";; esac; shift 2;;
    --project=*) PROJECT="${1#*=}"; shift;;
    --zone=*) ZONE="${1#*=}"; shift;;
    --machine-type=*) MACHINE_TYPE="${1#*=}"; shift;;
-   --environment=*) ENVIRONMENT="${1#*=}"; shift;;
+   --boot-disk-size=*) BOOT_DISK_SIZE="${1#*=}"; shift;;
    --web-terminal) WEB=true; shift;;
-   --opencode) OPENCODE=true; shift;;
    --yes) YES=true; shift;;
-   create|configure|idle-shutdown|opencode|opencode-link|start|stop|list|shell|config-ssh|web-terminal|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   create|configure|start|stop|list|shell|config-ssh|web-terminal|recover|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
    *) NAME="$1"; shift;;
  esac
@@ -50,406 +51,202 @@ done
 if [[ ! "$NAME" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || ((${#NAME} > 47)); then
   die 'Invalid workstation name'
 fi
-if [[ -n "$ENVIRONMENT" ]]; then
-  # Accept one or more environments, comma- or whitespace-separated.
-  split="${ENVIRONMENT//[, ]/ }"
-  split="${split//$'\n'/ }"
-  read -r -a ENVIRONMENTS <<< "$split"
-  filtered=()
-  for environment in "${ENVIRONMENTS[@]}"; do
-    [[ -n "$environment" ]] || continue
-    [[ "$environment" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || die "Invalid environment name: $environment"
-    for seen in "${filtered[@]}"; do
-      [[ "$seen" == "$environment" ]] && continue 2
-    done
-    filtered+=("$environment")
-  done
-  ENVIRONMENTS=("${filtered[@]}")
-fi
-if ((${#ENVIRONMENTS[@]} == 0)); then
-  mapfile -t ENVIRONMENTS < <(default_environments)
-fi
-[[ "$ACTION" != configure || -n "${ENVIRONMENTS[*]}" ]] || die 'configure requires --environment'
 command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
-command -v jq >/dev/null || die 'Install jq'
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
 [[ "$PROJECT" != '(unset)' && -n "$PROJECT" ]] || die 'Specify --project'
 INSTANCE="workstation-$NAME"
-BROWSER_APPS_PASSWORD_SECRET="$INSTANCE-web-terminal-password"
-GCLOUD_ARGS=(--project "$PROJECT")
+BUCKET="workstation-images-$PROJECT"
+SECRET_WEB="$INSTANCE-web-password"
+SECRET_RECOVERY="$INSTANCE-recovery-password"
+GC=(--project "$PROJECT")
 if [[ "$ACTION" != list && "$ACTION" != config-ssh ]]; then
- [[ "$ZONE" != '(unset)' && -n "$ZONE" ]] || die 'Specify --zone'
- GCLOUD_ARGS+=(--zone "$ZONE")
+  [[ "$ZONE" != '(unset)' && -n "$ZONE" ]] || die 'Specify --zone'
+  GC+=(--zone "$ZONE")
 fi
-field() { gcloud compute instances describe "$INSTANCE" "${GCLOUD_ARGS[@]}" --format="value($1)" 2>/dev/null || true; }
+field() { gcloud compute instances describe "$INSTANCE" "${GC[@]}" --format="value($1)" 2>/dev/null || true; }
 status() { field status; }
-wait_ssh() {
-  local attempt
-  attempt=0
-  while (( attempt < 40 )); do
-    if gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command true >/dev/null 2>&1; then return 0; fi
+external_ip() { field 'networkInterfaces[0].accessConfigs[0].natIP'; }
+random_password() { head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32; }
+wait_ssh_for() {
+  local instance="$1"
+  for _ in {1..40}; do
+    if gcloud compute ssh "developer@$instance" "${GC[@]}" --quiet --command true >/dev/null 2>&1; then return 0; fi
     sleep 5
-    attempt=$(( attempt + 1 ))
   done
   die 'SSH did not become available'
 }
-ensure_setup() {
-  wait_ssh
-  if ! gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1; then
-    echo 'Completing workstation setup...'
-    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/setup"
-  fi
-  # Install (or refresh) the idle auto-shutdown watchdog on every management call.
-  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown" >/dev/null || die 'Could not install idle shutdown'
-  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /var/lib/workstation-setup.done' >/dev/null 2>&1 || die 'Workstation setup did not complete'
+wait_ssh() {
+  wait_ssh_for "$INSTANCE"
 }
-app_dir() { printf '%s\n' "$ROOT/app/$1"; }
-app_config() { printf '%s\n' "$ROOT/app/$1/config.json"; }
-app_names() {
-  # Apps are the directories under app/ that carry a config.json.
-  local dir
-  for dir in "$ROOT"/app/*/; do
-    if [[ -d "$dir" && -f "$dir/config.json" ]]; then
-      printf '%s\n' "$(basename "$dir")"
-    fi
-  done
-}
-app_env_names() {
-  # Apps with an env file: each maps to a fixed GitHub secret WORKSTATION_ENV_<APP>
-  # whose value is written to ~/.env.<app> on the workstation.
-  local app
-  for app in $(app_names); do
-    jq -e '.env == true' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
-  done
-}
-app_service_apps() {
-  # Apps that run as a supervised service behind Caddy.
-  local app
-  for app in $(app_names); do
-    jq -e '.service != null' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
-  done
-}
-app_environment_names() {
-  # Apps selectable as a configurable environment (have a setup script).
-  local app
-  for app in $(app_names); do
-    jq -e '.environment == true' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
-  done
-}
-default_environments() {
-  # Environment apps loaded by default when none are specified.
-  local app
-  for app in $(app_names); do
-    jq -e '.environment == true and .default == true' "$(app_config "$app")" >/dev/null 2>&1 && printf '%s\n' "$app"
-  done
-}
-app_packages() {
-  # Required system packages declared by the given apps.
-  local app
-  for app in "$@"; do
-    jq -r '.packages[]? // empty' "$(app_config "$app")"
-  done
-}
-ensure_app_packages() {
-  # Idempotently install required system packages for the given apps.
-  # gh needs the GitHub CLI apt repository, set up here when it is declared.
-  local app pkgs=() needs_gh=false p
-  mapfile -t pkgs < <(app_packages "$@")
-  ((${#pkgs[@]})) || return 0
-  [[ "$(status)" == RUNNING ]] || return 0
-  for p in "${pkgs[@]}"; do [[ "$p" == gh ]] && needs_gh=true; done
-  (
-    remote="$(mktemp)"
-    trap 'rm -f "$remote"' EXIT
-    {
-      printf 'set -euo pipefail\n'
-      printf 'export DEBIAN_FRONTEND=noninteractive\n'
-      printf 'apt-get update >/dev/null\n'
-      if [[ "$needs_gh" == true ]]; then
-        cat <<'GH'
-if ! command -v gh >/dev/null; then
-  install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list
-  apt-get update >/dev/null
-fi
-GH
-      fi
-      for p in "${pkgs[@]}"; do
-        printf 'dpkg -s %s >/dev/null 2>&1 || apt-get install -y --no-install-recommends %s >/dev/null\n' "$p" "$p"
-      done
-    } > "$remote"
-    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command 'sudo bash -s' < "$remote" >/dev/null
-  )
-}
-app_service_field() {
-  jq -r --arg field "$2" '.service[$field] // empty' "$(app_config "$1")"
-}
-app_setup_path() {
-  jq -r '.setup // empty' "$(app_config "$1")"
-}
-tool_env_var() {
-  printf 'WORKSTATION_ENV_%s\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
-}
-emit_tool_env_files() {
-  # Emit remote shell lines that write each set WORKSTATION_ENV_<TOOL> value to
-  # ~/.env.<tool> (0600) and source it (set -a), so tools and the environment
-  # script see the variables. Paths use $HOME so they resolve on the remote
-  # host (the user running the bundle), not on the machine that emits it.
-  local tool tool_var value_file value_q wrote_files=()
-  for tool in $(app_env_names); do
-    tool_var="$(tool_env_var "$tool")"
-    value_file="${!tool_var:-}"
-    if [[ -n "$value_file" ]]; then
-      value_file="$(printf '%s\n' "$value_file" | sed -E 's/^[[:space:]]*export[[:space:]]+//')"
-      value_q="$(printf '%q' "$value_file")"
-      printf 'umask 077\n'
-      printf '%s\n' "printf '%s\\n' ${value_q} > \$HOME/.env.${tool}"
-      # shellcheck disable=SC2016
-      printf 'chmod 600 $HOME/.env.%s\n' "$tool"
-      wrote_files+=("$tool")
-    fi
-  done
-  if ((${#wrote_files[@]})); then
-    printf 'set -a\n'
-    for tool in "${wrote_files[@]}"; do
-      # shellcheck disable=SC2016
-      printf '. $HOME/.env.%s\n' "$tool"
-    done
-    printf 'set +a\n'
+ensure_bucket() {
+  if ! gsutil ls -b "gs://$BUCKET" >/dev/null 2>&1; then
+    gsutil mb -p "$PROJECT" -l "${ZONE%-*}" "gs://$BUCKET" >/dev/null
   fi
 }
-materialize_tool_env_files() {
-  # Write tool env files now (e.g. right after create, without an environment
-  # script), using whatever WORKSTATION_ENV_<TOOL> values are in the CLI's
-  # environment. No-op when none are set.
-  ensure_setup                      # developer must exist before sudo -u developer
-  [[ "$(status)" == RUNNING ]] || return 0
-  (
-    umask 077
-    bundle="$(mktemp)"
-    trap 'rm -f "$bundle"' EXIT
-    {
-      printf 'set -euo pipefail\nset +x\n'
-      emit_tool_env_files
-    } > "$bundle"
-    [[ "$(grep -vc '^$' "$bundle")" -gt 3 ]] || return 0   # only boilerplate: nothing to write
-    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command 'sudo -H -u developer bash -l -se' < "$bundle" >/dev/null
-  )
+image_name() {
+  local hash
+  hash="$(basename "$1" | cut -d- -f1)"
+  printf 'nixos-base-%s' "${hash:0:10}"
 }
-restart_service_apps() {
-  # Reload service apps so they pick up env-file changes from their
-  # EnvironmentFile. try-restart no-ops for units that are not running.
-  local app units=()
-  for app in $(app_service_apps); do units+=("workstation-$app.service"); done
-  ((${#units[@]})) || return 0
-  [[ "$(status)" == RUNNING ]] || return 0
-  gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-    --command "sudo systemctl try-restart ${units[*]}" >/dev/null 2>&1 || true
+ensure_gce_image() {
+  # Prints only the GCE image name on stdout; all progress goes to stderr so
+  # it can be captured with $(). Requires a Linux machine with Nix.
+  local out img file
+  if [[ "$(uname -s)" != Linux ]]; then
+    die 'Creating a NixOS instance builds the base image. Run from a Linux machine with Nix, or use the GitHub Actions workflow.'
+  fi
+  command -v nix >/dev/null || die 'Install Nix (with flakes) to build the base image'
+  echo 'Building the base NixOS image...' >&2
+  out="$(cd "$ROOT" && nix build ".#packages.$SYSTEM.gceImage" --no-link --print-out-paths)"
+  img="$(image_name "$out")"
+  if ! gcloud compute images describe "$img" --project "$PROJECT" >/dev/null 2>&1; then
+    file="$(find "$out" -maxdepth 1 -type f -name '*.raw.tar.gz' -o -maxdepth 1 -type f -name '*.tar.gz' | head -1)"
+    [[ -n "$file" ]] || die "Base image artifact not found in $out"
+    echo "Uploading base image $img..." >&2
+    if ! gsutil -q stat "gs://$BUCKET/${img}.tar.gz"; then
+      gsutil -q cp "$file" "gs://$BUCKET/${img}.tar.gz"
+    fi
+    gcloud compute images create "$img" --project "$PROJECT" \
+      --source-uri "gs://$BUCKET/${img}.tar.gz" \
+      --storage-location "${ZONE%-*}" \
+      --labels "managed-workstation=true" >/dev/null
+  fi
+  echo "$img"
 }
-configure_environment() {
+deploy() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
-  ensure_setup
-  ensure_app_packages "${ENVIRONMENTS[@]}"
-
-  local environment setup_script bundle
-  for environment in "${ENVIRONMENTS[@]}"; do
-    [[ " $(app_environment_names) " == *" $environment "* ]] || die "Not a configurable environment app: $environment"
-    setup_script="$ROOT/$(app_setup_path "$environment")"
-    [[ -f "$setup_script" ]] || die "Environment setup script not found: $setup_script"
-
-    (
-      umask 077
-      bundle="$(mktemp)"
-      trap 'rm -f "$bundle"' EXIT
-
-      {
-        printf 'set -euo pipefail\nset +x\n'
-        printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$environment"
-        printf 'export WORKSTATION_NAME=%q\n' "$NAME"
-        emit_tool_env_files
-        cat "$setup_script"
-      } > "$bundle"
-
-      gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-        --command 'sudo -H -u developer bash -l -se' < "$bundle"
-    )
-
-    echo "environment: $environment"
-  done
-  restart_service_apps
+  wait_ssh
+  "$ROOT/infra/workstation/deploy" --instance "$INSTANCE" --project "$PROJECT" --zone "$ZONE" --repo "$ROOT"
 }
-browser_app_tag() {
-  printf 'workstation-%s\n' "$1"
-}
-browser_app_port() {
-  app_service_field "$1" "port"
-}
-store_browser_apps_password() {
-  local password="$1"
-  if ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud secrets create "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" --replication-policy automatic \
+add_secret() {
+  local name="$1" value="$2" label="$3"
+  if ! gcloud secrets describe "$name" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets create "$name" --project "$PROJECT" --replication-policy automatic \
       --labels managed-workstation=true,workstation="$NAME" >/dev/null
   fi
-  if ! printf %s "$password" | gcloud secrets versions add "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" --data-file=- >/dev/null; then
-    die 'Password changed on VM but not saved in Secret Manager. Run web-terminal or opencode again.'
+  if ! printf %s "$value" | gcloud secrets versions add "$name" --project "$PROJECT" --data-file=- >/dev/null; then
+    die "$label password was changed on the VM but not saved in Secret Manager; run web-terminal again"
   fi
 }
-ensure_browser_app_tag() {
-  # Idempotently expose a browser app's port through tags and a firewall rule.
-  local app="$1" tag port
-  tag="$(browser_app_tag "$app")"
-  port="$(browser_app_port "$app")"
-  if [[ "$(field 'tags.items')" != *"$tag"* ]]; then
-    gcloud compute instances add-tags "$INSTANCE" "${GCLOUD_ARGS[@]}" --tags "$tag" >/dev/null
-  fi
-  if ! gcloud compute firewall-rules describe "$tag" --project "$PROJECT" >/dev/null 2>&1; then
-    gcloud compute firewall-rules create "$tag" --project "$PROJECT" --allow "tcp:$port" --target-tags "$tag" >/dev/null
-  fi
-}
-enable_browser_app() {
-  # enable_browser_app APP [ROTATE] [PASSWORD]
-  # ROTATE=true or a new workstation forces a fresh password. An explicit
-  # PASSWORD is used for all apps in one rotation; the caller stores it.
-  local app="$1" rotate_mode="${2:-false}" password="${3:-}"
-  local port upstream user workdir path exec_line generated_value=false setup_script
+web_access() {
+  local web recovery
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
-  ensure_setup
-  ensure_browser_app_tag "$app"
-  port="$(app_service_field "$app" "port")"
-  upstream="$(app_service_field "$app" "upstream")"
-  user="$(app_service_field "$app" "user")"
-  workdir="$(app_service_field "$app" "working_dir")"
-  path="$(app_service_field "$app" "path")"
-  exec_line="$(jq -r '.service.exec | join(" ")' "$(app_config "$app")")"
-
-  # Per-app install/config (binary, files) runs first, as root.
-  setup_script="$ROOT/app/$app/setup.sh"
-  if [[ -f "$setup_script" ]]; then
-    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command 'sudo bash -s' < "$setup_script" >/dev/null
+  wait_ssh
+  if [[ "$(field 'tags.items')" != *"$TAG"* ]]; then
+    gcloud compute instances add-tags "$INSTANCE" "${GC[@]}" --tags "$TAG" >/dev/null
   fi
-
-  if [[ -z "$password" ]]; then
-    if [[ "$rotate_mode" == true ]] || ! gcloud secrets describe "$BROWSER_APPS_PASSWORD_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
-      password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
-      generated_value=true
-    fi
+  if ! gcloud compute firewall-rules describe "$TAG" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud compute firewall-rules create "$TAG" --project "$PROJECT" \
+      --allow tcp:443 --target-tags "$TAG" >/dev/null
   fi
-  if [[ -n "$password" ]]; then
-    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APPS_PASSWORD='$password' BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PATH='$path' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
-  else
-    # Reuse the existing bcrypt hash; just make sure the app is behind Caddy.
-    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "sudo BROWSER_APP_USER='$user' BROWSER_APP_WORKDIR='$workdir' BROWSER_APP_PATH='$path' BROWSER_APP_PORT='$port' BROWSER_APP_UPSTREAM='$upstream' BROWSER_APP_EXEC='$exec_line' bash -s '$app'" < "$ROOT/infra/workstation/browser-apps" >/dev/null
-  fi
-  if ! gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo test -f /etc/workstation/browser-apps' >/dev/null 2>&1; then
-    die 'Browser app install did not complete on the workstation'
-  fi
-  if [[ "$generated_value" == true ]]; then
-    store_browser_apps_password "$password"
-  fi
-  echo "$app: https://$(field 'networkInterfaces[0].accessConfigs[0].natIP'):$port"
-  echo "secret: $BROWSER_APPS_PASSWORD_SECRET"
-  echo "password: https://console.cloud.google.com/security/secret-manager/secret/$BROWSER_APPS_PASSWORD_SECRET?project=$PROJECT"
-}
-rotate() {
-  # rotate [APP...] : rotate one shared password, then enable each app.
-  # With no arguments, the service apps currently tagged on the instance.
-  local app password apps=()
-  if (($#)); then
-    apps=("$@")
-  else
-    for app in $(app_service_apps); do
-      if [[ "$(field 'tags.items')" == *"$(browser_app_tag "$app")"* ]]; then
-        apps+=("$app")
-      fi
-    done
-  fi
-  ((${#apps[@]})) || return 0
-  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
-  ensure_setup
-  password="$(head -c 64 /dev/urandom | base64 | tr -dc a-zA-Z0-9 | head -c 32)"
-  store_browser_apps_password "$password"
-  for app in "${apps[@]}"; do
-    enable_browser_app "$app" true "$password"
-  done
+  web="$(random_password)"
+  recovery="$(random_password)"
+  {
+    printf 'export WEB_PASSWORD=%q\n' "$web"
+    printf 'export RECOVERY_PASSWORD=%q\n' "$recovery"
+    cat "$ROOT/infra/workstation/web-access"
+  } | gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' >/dev/null
+  add_secret "$SECRET_WEB" "$web" website
+  add_secret "$SECRET_RECOVERY" "$recovery" recovery
+  echo "browser: https://$(external_ip)"
+  echo "password secret: $SECRET_WEB"
+  echo "password: https://console.cloud.google.com/security/secret-manager/secret/$SECRET_WEB?project=$PROJECT"
+  echo "recovery: https://console.cloud.google.com/security/secret-manager/secret/$SECRET_RECOVERY?project=$PROJECT"
 }
 case "$ACTION" in
  create)
     if [[ -z "$(status)" ]]; then
-      gcloud compute machine-types describe "$MACHINE_TYPE" "${GCLOUD_ARGS[@]}" >/dev/null
-      # GCE executes startup-script metadata directly; no cloud-init dependency is required.
-      gcloud compute instances create "$INSTANCE" "${GCLOUD_ARGS[@]}" \
+      ensure_bucket
+      IMG="$(ensure_gce_image)"
+      gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
+      # GCE serial console is enabled so a failed boot can be recovered from
+      # the serial console. SSH keys are delivered by the guest agent.
+      gcloud compute instances create "$INSTANCE" "${GC[@]}" \
         --machine-type "$MACHINE_TYPE" \
-        --image-project "$IMAGE_PROJECT" \
-        --image-family "$IMAGE_FAMILY" \
-        --boot-disk-size "${BOOT_DISK_GB}GB" \
+        --image "$IMG" \
+        --boot-disk-size "$BOOT_DISK_SIZE" \
+        --boot-disk-type pd-balanced \
         --labels managed-workstation=true \
-        --metadata-from-file="startup-script=$ROOT/infra/workstation/setup"
+        --metadata serial-port-enable=true
     else echo "$INSTANCE already exists"; fi
-    app_args=()
-    [[ "$WEB" == true ]] && app_args+=(code)
-    [[ "$OPENCODE" == true ]] && app_args+=(opencode)
-    materialize_tool_env_files
-    if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
-    ensure_app_packages code opencode
-    [[ -z "${ENVIRONMENTS[*]}" ]] || configure_environment
-    restart_service_apps
+    deploy
+    if [[ "$WEB" == true ]]; then web_access; fi
     ;;
-  configure) configure_environment;;
- idle-shutdown)
-   [[ "$(status)" == RUNNING ]] || die 'Workstation not running'
-   gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet --command 'sudo bash -s' < "$ROOT/infra/workstation/idle-shutdown"
-   ;;
- start)
-   [[ -n "$(status)" ]] || die 'Workstation does not exist'
-   if [[ "$(status)" != RUNNING ]]; then
-     gcloud compute instances start "$INSTANCE" "${GCLOUD_ARGS[@]}"
-     rotate
-   fi
-   ;;
- stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GCLOUD_ARGS[@]}";;
- shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}";;
- config-ssh) gcloud compute config-ssh --project "$PROJECT";;
- web-terminal) ensure_browser_app_tag code; rotate;;
-  opencode) ensure_browser_app_tag opencode; rotate;;
-  opencode-link)
-    [[ "$(status)" == RUNNING ]] || die 'Workstation not running'
-    ensure_setup
-    ip="$(field 'networkInterfaces[0].accessConfigs[0].natIP')"
-    [[ -n "$ip" ]] || die 'No external IP'
-    link="$(gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
-      --command "timeout 20 sudo -u developer /home/developer/.opencode/bin/opencode pair --url https://$ip:$(app_service_field opencode port)" 2>/dev/null |
-      grep -oE "https://$ip:$(app_service_field opencode port)/auth/connect/[A-Za-z0-9_-]+" | head -1)"
-    [[ -n "$link" ]] || die 'Could not generate an opencode pairing link (is opencode running?)'
-    echo "opencode link: $link (one-time, expires in 5 minutes)"
+  configure) deploy;;
+  start)
+    [[ -n "$(status)" ]] || die 'Workstation does not exist'
+    if [[ "$(status)" != RUNNING ]]; then
+      gcloud compute instances start "$INSTANCE" "${GC[@]}"
+      if [[ "$(field 'tags.items')" == *"$TAG"* ]]; then web_access; fi
+    fi
+    ;;
+  stop) [[ -n "$(status)" ]] || die 'Workstation does not exist'; [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GC[@]}";;
+  shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "developer@$INSTANCE" "${GC[@]}";;
+  config-ssh) gcloud compute config-ssh --project "$PROJECT";;
+  web-terminal) web_access;;
+  recover)
+    [[ -n "$(status)" ]] || die 'Workstation does not exist'
+    RECOVERY_INSTANCE="$INSTANCE-recovery"
+    if [[ -n "$(gcloud compute instances describe "$RECOVERY_INSTANCE" "${GC[@]}" --format='value(name)' 2>/dev/null)" ]]; then
+      die "Recovery instance already exists: $RECOVERY_INSTANCE"
+    fi
+    ensure_bucket
+    IMG="$(ensure_gce_image)"
+    if [[ "$YES" != true ]]; then read -r -p "Recovering stops $INSTANCE and creates a rescue instance. Type $NAME to continue: " CONFIRM; [[ "$CONFIRM" == "$NAME" ]] || die 'Cancelled'; fi
+    [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GC[@]}"
+    echo "Starting rescue instance $RECOVERY_INSTANCE..."
+    gcloud compute instances create "$RECOVERY_INSTANCE" "${GC[@]}" \
+      --machine-type "$MACHINE_TYPE" \
+      --image "$IMG" \
+      --boot-disk-size 20 \
+      --boot-disk-type pd-balanced \
+      --labels managed-workstation=true,recovery-of="$INSTANCE" \
+      --metadata serial-port-enable=true
+    wait_ssh_for "$RECOVERY_INSTANCE"
+    gcloud compute instances attach-disk "$RECOVERY_INSTANCE" "${GC[@]}" \
+      --disk "$INSTANCE" --device-name old-disk >/dev/null
+    INSTANCE="$RECOVERY_INSTANCE"
+    NAME="$NAME-recovery"
+    deploy
+    cat <<'EOF'
+Recovery instance is ready. Your original disk is attached as /dev/disk/by-id/google-old-disk.
+Recover files from it with:
+
+  sudo mkdir -p /mnt/recovered
+  ls /dev/disk/by-id/google-old-disk*
+  sudo mount /dev/disk/by-id/google-old-disk-part1 /mnt/recovered
+
+Then copy what you need, destroy the recovery instance, and create fresh via:
+  scripts/workstation destroy RECOVERY
+  scripts/workstation create main --web-terminal
+EOF
     ;;
   list)
     gcloud compute instances list --project "$PROJECT" --format='csv[no-heading](name,status,machineType.basename(),zone.basename(),networkInterfaces[0].accessConfigs[0].natIP,tags.items,labels.managed-workstation)' |
       while IFS=, read -r instance state machine zone ip tags managed; do
         [[ "$managed" == true ]] || continue
-        secret="$instance-web-terminal-password"
-        web_terminal_url=""
-        opencode_url=""
-        [[ "$tags" == *"$(browser_app_tag code)"* && -n "$ip" ]] && web_terminal_url="https://$ip:$(app_service_field code port)"
-        [[ "$tags" == *"$(browser_app_tag opencode)"* && -n "$ip" ]] && opencode_url="https://$ip:$(app_service_field opencode port)"
-        printf '%s,%s,%s,%s,%s,%s,%s,' "$instance" "$state" "$machine" "$zone" "$ip" "$web_terminal_url" "$opencode_url"
-        if gcloud secrets describe "$secret" --project "$PROJECT" >/dev/null 2>&1; then
-          printf 'https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
-            "$secret" "$PROJECT"
+        printf '%s,%s,%s,%s,%s' "$instance" "$state" "$machine" "$zone" "$ip"
+        if [[ "$tags" == *"$TAG"* && -n "$ip" ]]; then
+          web_secret="$instance-web-password"
+          recovery_secret="$instance-recovery-password"
+          printf ',https://%s,' "$ip"
+          if gcloud secrets describe "$web_secret" --project "$PROJECT" >/dev/null 2>&1; then
+            printf 'https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
+              "$web_secret" "$PROJECT"
+          fi
+          if gcloud secrets describe "$recovery_secret" --project "$PROJECT" >/dev/null 2>&1; then
+            printf ',https://console.cloud.google.com/security/secret-manager/secret/%s?project=%s' \
+              "$recovery_secret" "$PROJECT"
+          fi
         fi
         printf '\n'
       done
     ;;
- destroy)
-   [[ -n "$(status)" ]] || { echo 'Workstation does not exist'; exit 0; }
-   [[ "$(field 'labels.managed-workstation')" == true ]] || die 'Not a managed workstation; refusing to delete'
-   if [[ "$YES" != true ]]; then read -r -p "Type $NAME to permanently delete VM and boot disk: " CONFIRM; [[ "$CONFIRM" == "$NAME" ]] || die 'Cancelled'; fi
-   gcloud compute instances delete "$INSTANCE" "${GCLOUD_ARGS[@]}" --delete-disks boot --quiet
-   ;;
+  destroy)
+    [[ -n "$(status)" ]] || { echo 'Workstation does not exist'; exit 0; }
+    [[ "$(field 'labels.managed-workstation')" == true ]] || die 'Not a managed workstation; refusing to delete'
+    if [[ "$YES" != true ]]; then read -r -p "Type $NAME to permanently delete VM and boot disk: " CONFIRM; [[ "$CONFIRM" == "$NAME" ]] || die 'Cancelled'; fi
+    gcloud compute instances delete "$INSTANCE" "${GC[@]}" --delete-disks boot --quiet
+    ;;
 esac
