@@ -20,7 +20,6 @@ readonly SECRET_WRITER_ROLE_ID="workstationSecretWriter"
 readonly IMAGE_BUCKET_PREFIX="workstation-images"
 readonly WEB_FIREWALL_RULE="workstation-web"
 readonly WEB_FIREWALL_TAG="workstation-web"
-readonly CHECK=false
 
 PROJECT=""
 REPOSITORY="$DEFAULT_REPOSITORY"
@@ -142,10 +141,12 @@ missing() {
 # --- API enablement ------------------------------------------------------
 
 REQUIRED_APIS=(
+  cloudresourcemanager.googleapis.com
   compute.googleapis.com
   iam.googleapis.com
   iamcredentials.googleapis.com
   secretmanager.googleapis.com
+  serviceusage.googleapis.com
   storage.googleapis.com
   sts.googleapis.com
 )
@@ -215,13 +216,13 @@ ensure_project_iam_binding() {
   if gcloud projects get-iam-policy "$PROJECT" --flatten='bindings[].members' \
     --format='value(bindings.role)' --filter="bindings.members=$member" 2>/dev/null \
     | grep -qx "$role"; then
-    say "iam ok: $role (${member##*:})"
+    say "iam ok: $description (${member##*:})"
   elif confirm; then
-    say "granting $role to ${member##*:}"
+    say "granting $description to ${member##*:}"
     gcloud projects add-iam-policy-binding "$PROJECT" \
       --member="$member" --role="$role" >/dev/null
   else
-    missing "iam $role on $member"
+    missing "iam $description ($role)"
   fi
 }
 
@@ -231,21 +232,35 @@ ensure_sa_iam_binding() {
     --flatten='bindings[].members' \
     --format='value(bindings.role)' --filter="bindings.members=$member" 2>/dev/null \
     | grep -qx "$role"; then
-    say "iam ok: $role on $account (${member##*:})"
+    say "iam ok: $description (${member##*:})"
   elif confirm; then
-    say "granting $role on $account to ${member##*:}"
+    say "granting $description on $account to ${member##*:}"
     gcloud iam service-accounts add-iam-policy-binding "$account" \
       --project "$PROJECT" --member="$member" --role="$role" >/dev/null
   else
-    missing "iam $role on $account for $member"
+    missing "iam $description ($role)"
   fi
 }
 
 configure_identity_iam() {
-  ensure_project_iam_binding \
-    "compute admin for GitHub Actions" \
-    "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
-    "roles/compute.admin"
+  # The management identity must be able to run `provision` itself: read the
+  # project (Cloud Resource Manager), enable APIs, manage IAM/WIF/roles,
+  # buckets, and compute.
+  local role
+  for role in \
+    roles/compute.admin \
+    roles/resourcemanager.projectIamAdmin \
+    roles/browser \
+    roles/serviceusage.serviceUsageAdmin \
+    roles/iam.securityAdmin \
+    roles/iam.serviceAccountAdmin \
+    roles/iam.workloadIdentityPoolAdmin \
+    roles/storage.admin; do
+    ensure_project_iam_binding \
+      "management role for GitHub Actions" \
+      "serviceAccount:$GITHUB_SERVICE_ACCOUNT" \
+      "$role"
+  done
 
   # Allow the workflow to act as the default Compute Engine service account
   # when creating instances and computing their SSH access.
@@ -340,8 +355,10 @@ EOF
 
 main() {
   parse_arguments "$@"
-  load_project_context
+  # Enable APIs first: load_project_context needs the Cloud Resource Manager
+  # API, which the management identity may not be able to call otherwise.
   enable_apis
+  load_project_context
   configure_github_service_account
   configure_workload_identity
   configure_identity_iam

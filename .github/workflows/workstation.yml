@@ -64,7 +64,6 @@ jobs:
             args+=(--machine-type "$MACHINE_TYPE" --boot-disk-size "$BOOT_DISK_SIZE")
             [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
           fi
-          if [[ "$ACTION" == destroy || "$ACTION" == recover ]]; then args+=(--yes); fi
           bash scripts/workstation "${args[@]}" > output.txt
           {
             echo "## Workstation $NAME"
