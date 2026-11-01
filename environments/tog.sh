@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# workstation-secret: OPENROUTER_API_KEY
+# Secrets for this environment come from the materialized tool env file
+# ~/.env.tog (Workstation secret WORKSTATION_ENV_TOG), sourced by configure.
 # workstation-app: opencode
 
 set -euo pipefail

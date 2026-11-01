@@ -110,6 +110,15 @@ read_environment_secret() {
   fi
   return 1
 }
+tool_env_names() {
+  # Registered tool environment files: each maps to a fixed GitHub secret
+  # WORKSTATION_ENV_<TOOL> whose value is written to ~/.env.<tool> on the
+  # workstation (repository-level default, per-environment override).
+  printf '%s\n' code opencode tog
+}
+tool_env_var() {
+  printf 'WORKSTATION_ENV_%s\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+}
 configure_environment() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
@@ -128,6 +137,25 @@ configure_environment() {
         printf 'set -euo pipefail\nset +x\n'
         printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$environment"
         printf 'export WORKSTATION_NAME=%q\n' "$NAME"
+        local tool tool_var value_file wrote_files=()
+        for tool in $(tool_env_names); do
+          tool_var="$(tool_env_var "$tool")"
+          value_file="${!tool_var:-}"
+          if [[ -n "$value_file" ]]; then
+            printf 'umask 077\n'
+            # Emit:  printf '%s\n' <shell-quoted content> > ~/.env.<tool>
+            printf '%s\n' "$(printf "printf '%%s\\\\n' %q > %q" "$value_file" "$HOME/.env.$tool")"
+            printf 'chmod 600 %q\n' "$HOME/.env.$tool"
+            wrote_files+=("$HOME/.env.$tool")
+          fi
+        done
+        if ((${#wrote_files[@]})); then
+          printf 'set -a\n'
+          for file in "${wrote_files[@]}"; do
+            printf '. %q\n' "$file"
+          done
+          printf 'set +a\n'
+        fi
         while IFS= read -r secret; do
           if ! value="$(read_environment_secret "$secret")"; then
             die "GitHub Environment secret is not configured: $secret"

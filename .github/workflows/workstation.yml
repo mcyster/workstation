@@ -162,6 +162,9 @@ jobs:
       SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
       NAME: ${{ inputs.name }}
       ENVIRONMENT: ${{ matrix.environment }}
+      WORKSTATION_ENV_CODE: ${{ secrets.WORKSTATION_ENV_CODE }}
+      WORKSTATION_ENV_OPENCODE: ${{ secrets.WORKSTATION_ENV_OPENCODE }}
+      WORKSTATION_ENV_TOG: ${{ secrets.WORKSTATION_ENV_TOG }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
