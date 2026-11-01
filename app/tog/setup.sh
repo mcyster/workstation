@@ -4,6 +4,9 @@
 # sourced by the workstation CLI before this runs.
 set -euo pipefail
 
+git config --global user.name "Mark Cyster"
+git config --global user.email "mcyster@gmail.com"
+
 checkout="$HOME/tog/main"
 mkdir -p "$(dirname "$checkout")"
 
