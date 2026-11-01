@@ -90,6 +90,7 @@ After=network-online.target
 User=$BROWSER_APP_USER
 WorkingDirectory=$BROWSER_APP_WORKDIR
 Environment=HOME=$BROWSER_APP_WORKDIR
+EnvironmentFile=/home/developer/.env.$APP_NAME
 ExecStart=$BROWSER_APP_EXEC
 Restart=on-failure
 
