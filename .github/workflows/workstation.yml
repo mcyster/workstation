@@ -43,6 +43,9 @@ jobs:
       MACHINE_TYPE: ${{ inputs.machine_type }}
       WEB_TERMINAL: ${{ inputs.web_terminal }}
       OPENCODE: ${{ inputs.opencode }}
+      WORKSTATION_ENV_CODE: ${{ secrets.WORKSTATION_ENV_CODE }}
+      WORKSTATION_ENV_OPENCODE: ${{ secrets.WORKSTATION_ENV_OPENCODE }}
+      WORKSTATION_ENV_TOG: ${{ secrets.WORKSTATION_ENV_TOG }}
       ENVIRONMENT: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4

@@ -119,6 +119,48 @@ tool_env_names() {
 tool_env_var() {
   printf 'WORKSTATION_ENV_%s\n' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
 }
+emit_tool_env_files() {
+  # Emit remote shell lines that write each set WORKSTATION_ENV_<TOOL> value to
+  # ~/.env.<tool> (0600) and source it (set -a), so tools and the environment
+  # script see the variables.
+  local tool tool_var value_file wrote_files=()
+  for tool in $(tool_env_names); do
+    tool_var="$(tool_env_var "$tool")"
+    value_file="${!tool_var:-}"
+    if [[ -n "$value_file" ]]; then
+      printf 'umask 077\n'
+      # Emit:  printf '%s\n' <shell-quoted content> > ~/.env.<tool>
+      printf '%s\n' "$(printf "printf '%%s\\\\n' %q > %q" "$value_file" "$HOME/.env.$tool")"
+      printf 'chmod 600 %q\n' "$HOME/.env.$tool"
+      wrote_files+=("$HOME/.env.$tool")
+    fi
+  done
+  if ((${#wrote_files[@]})); then
+    printf 'set -a\n'
+    for file in "${wrote_files[@]}"; do
+      printf '. %q\n' "$file"
+    done
+    printf 'set +a\n'
+  fi
+}
+materialize_tool_env_files() {
+  # Write tool env files now (e.g. right after create, without an environment
+  # script), using whatever WORKSTATION_ENV_<TOOL> values are in the CLI's
+  # environment. No-op when none are set.
+  [[ "$(status)" == RUNNING ]] || return 0
+  (
+    umask 077
+    bundle="$(mktemp)"
+    trap 'rm -f "$bundle"' EXIT
+    {
+      printf 'set -euo pipefail\nset +x\n'
+      emit_tool_env_files
+    } > "$bundle"
+    [[ "$(grep -vc '^$' "$bundle")" -gt 3 ]] || return 0   # only boilerplate: nothing to write
+    gcloud compute ssh "$INSTANCE" "${GCLOUD_ARGS[@]}" --quiet \
+      --command 'sudo -H -u developer bash -l -se' < "$bundle" >/dev/null
+  )
+}
 configure_environment() {
   [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
   ensure_setup
@@ -137,25 +179,7 @@ configure_environment() {
         printf 'set -euo pipefail\nset +x\n'
         printf 'export WORKSTATION_ENVIRONMENT=%q\n' "$environment"
         printf 'export WORKSTATION_NAME=%q\n' "$NAME"
-        local tool tool_var value_file wrote_files=()
-        for tool in $(tool_env_names); do
-          tool_var="$(tool_env_var "$tool")"
-          value_file="${!tool_var:-}"
-          if [[ -n "$value_file" ]]; then
-            printf 'umask 077\n'
-            # Emit:  printf '%s\n' <shell-quoted content> > ~/.env.<tool>
-            printf '%s\n' "$(printf "printf '%%s\\\\n' %q > %q" "$value_file" "$HOME/.env.$tool")"
-            printf 'chmod 600 %q\n' "$HOME/.env.$tool"
-            wrote_files+=("$HOME/.env.$tool")
-          fi
-        done
-        if ((${#wrote_files[@]})); then
-          printf 'set -a\n'
-          for file in "${wrote_files[@]}"; do
-            printf '. %q\n' "$file"
-          done
-          printf 'set +a\n'
-        fi
+        emit_tool_env_files
         while IFS= read -r secret; do
           if ! value="$(read_environment_secret "$secret")"; then
             die "GitHub Environment secret is not configured: $secret"
@@ -311,6 +335,7 @@ case "$ACTION" in
     [[ "$WEB" == true ]] && app_args+=(web-terminal)
     [[ "$OPENCODE" == true ]] && app_args+=(opencode)
     if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
+    materialize_tool_env_files
     [[ -z "$ENVIRONMENT" ]] || configure_environment
     ;;
   configure) configure_environment;;
