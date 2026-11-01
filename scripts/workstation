@@ -122,23 +122,26 @@ tool_env_var() {
 emit_tool_env_files() {
   # Emit remote shell lines that write each set WORKSTATION_ENV_<TOOL> value to
   # ~/.env.<tool> (0600) and source it (set -a), so tools and the environment
-  # script see the variables.
-  local tool tool_var value_file wrote_files=()
+  # script see the variables. Paths use $HOME so they resolve on the remote
+  # host (the user running the bundle), not on the machine that emits it.
+  local tool tool_var value_file value_q wrote_files=()
   for tool in $(tool_env_names); do
     tool_var="$(tool_env_var "$tool")"
     value_file="${!tool_var:-}"
     if [[ -n "$value_file" ]]; then
+      value_q="$(printf '%q' "$value_file")"
       printf 'umask 077\n'
-      # Emit:  printf '%s\n' <shell-quoted content> > ~/.env.<tool>
-      printf '%s\n' "$(printf "printf '%%s\\\\n' %q > %q" "$value_file" "$HOME/.env.$tool")"
-      printf 'chmod 600 %q\n' "$HOME/.env.$tool"
-      wrote_files+=("$HOME/.env.$tool")
+      printf '%s\n' "printf '%s\\n' ${value_q} > \$HOME/.env.${tool}"
+      # shellcheck disable=SC2016
+      printf 'chmod 600 $HOME/.env.%s\n' "$tool"
+      wrote_files+=("$tool")
     fi
   done
   if ((${#wrote_files[@]})); then
     printf 'set -a\n'
-    for file in "${wrote_files[@]}"; do
-      printf '. %q\n' "$file"
+    for tool in "${wrote_files[@]}"; do
+      # shellcheck disable=SC2016
+      printf '. $HOME/.env.%s\n' "$tool"
     done
     printf 'set +a\n'
   fi
