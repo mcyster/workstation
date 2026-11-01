@@ -133,6 +133,7 @@ emit_tool_env_files() {
     tool_var="$(tool_env_var "$tool")"
     value_file="${!tool_var:-}"
     if [[ -n "$value_file" ]]; then
+      value_file="$(printf '%s\n' "$value_file" | sed -E 's/^[[:space:]]*export[[:space:]]+//')"
       value_q="$(printf '%q' "$value_file")"
       printf 'umask 077\n'
       printf '%s\n' "printf '%s\\n' ${value_q} > \$HOME/.env.${tool}"
