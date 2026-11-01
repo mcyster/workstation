@@ -82,18 +82,18 @@ gcloud config set project PROJECT
 gcloud config set compute/zone us-central1-a
 ```
 
-The included Nix development shell provides `gcloud` and adds `scripts/` to `PATH`. With Nix and direnv installed, run `direnv allow` to load it automatically.
+The included Nix development shell provides `gcloud` and adds this repository's `scripts/` directory to `PATH`, so the tools are invoked as plain commands (`workstation`, `workstation-secrets-push`) with no `scripts/` prefix. With Nix and direnv installed, run `direnv allow` to load it automatically.
 
 ```sh
-scripts/workstation create main --machine-type e2-standard-2 --web-terminal
-scripts/workstation configure main --environment "tog, devbase"
-scripts/workstation list
-scripts/workstation shell main
-scripts/workstation config-ssh main
-scripts/workstation stop main
-scripts/workstation start main
-scripts/workstation web-terminal main
-scripts/workstation destroy main
+workstation create main --machine-type e2-standard-2 --web-terminal
+workstation configure main --environment "tog, devbase"
+workstation list
+workstation shell main
+workstation config-ssh main
+workstation stop main
+workstation start main
+workstation web-terminal main
+workstation destroy main
 ```
 
 Override `--project` and `--zone` per command, or use `gcloud` configuration. `create` leaves existing machines unchanged; `start` preserves the disk. `destroy` removes the VM and boot disk; interactive CLI runs ask for confirmation, while the GitHub action uses `--yes`.
@@ -127,9 +127,9 @@ Workstations are described by a declarative app registry in `apps.json`. Each ap
 Keep the raw values (and any repository holding them, such as a private `secrets` repo) only on your machine, never on a workstation; `env-sync` there produces `~/.env.<app>`. Upload them to GitHub repository secrets with:
 
 ```sh
-scripts/workstation-secrets-push                # all apps, repo-level
-scripts/workstation-secrets-push opencode tog  # just those apps
-scripts/workstation-secrets-push --dir ~/secrets   # read ~/secrets/.env.<app>
+workstation-secrets-push                # all apps, repo-level
+workstation-secrets-push opencode tog  # just those apps
+workstation-secrets-push --dir ~/secrets   # read ~/secrets/.env.<app>
 ```
 
 The tool reads `~/.env.<APP>` (or `--dir`/`.env.<APP>`), uploads only files whose fingerprint changed (so repeated runs are no-ops), never prints values, and requires confirmation. It needs the GitHub CLI (`gh`), included in the development shell.
@@ -144,10 +144,10 @@ Browser apps are served through **Caddy**, which terminates TLS (self-signed) an
 Enable them with `web-terminal` or `opencode`, or when creating:
 
 ```sh
-scripts/workstation create main --web-terminal
-scripts/workstation create main --opencode
-scripts/workstation web-terminal main
-scripts/workstation opencode main
+workstation create main --web-terminal
+workstation create main --opencode
+workstation web-terminal main
+workstation opencode main
 ```
 
 Browse to either URL and accept the self-signed certificate warning. Both apps run plain on localhost; Caddy terminates TLS and authenticates the browser, so the workstation stores only a bcrypt hash of the password. The plaintext password is kept in the Google Cloud Secret Manager secret `workstation-NAME-web-terminal-password`. The workflow identity can create this secret and append versions, but cannot read its values. Use Secret Manager in the Google Cloud console to see the active password.
@@ -155,7 +155,7 @@ Browse to either URL and accept the self-signed certificate warning. Both apps r
 opencode keeps its own sign-in, whose username/password prompt has a known upstream auth loop ([#19920](https://github.com/anomalyco/opencode/issues/19920)). Sign the browser in with a **one-time pairing link** instead — from your laptop:
 
 ```sh
-scripts/workstation opencode-link main --project PROJECT --zone ZONE
+workstation opencode-link main --project PROJECT --zone ZONE
 ```
 
 or from inside the workstation (web terminal at `:8443`), as `developer`:
@@ -170,7 +170,7 @@ Open the printed link within 5 minutes (single use); Caddy asks for `workstation
 
 ## Provisioning and ownership
 
-- `scripts/workstation`: instance lifecycle, firewall, SSH, and password rotation.
+- `workstation`: instance lifecycle, firewall, SSH, and password rotation.
 - `infra/workstation/setup`: idempotent first-boot host provisioning, attached as a GCE startup script.
 - `infra/workstation/browser-apps`: Caddy TLS terminator, per-app systemd services, and bcrypt password hashing.
 - `infra/workstation/idle-shutdown`: auto-shutdown watchdog installed on every managed workstation.
@@ -184,7 +184,7 @@ VMs have names `workstation-NAME` and the label `managed-workstation=true`. The 
 Workstations power themselves off after being continuously idle, so a forgotten workstation stops accruing compute charges. The watchdog is installed on every workstation whenever setup or a management command runs, and also explicitly via:
 
 ```sh
-scripts/workstation idle-shutdown main
+workstation idle-shutdown main
 ```
 
 A workstation counts as **in use** while any of these hold:
