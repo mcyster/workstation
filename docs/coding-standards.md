@@ -39,6 +39,19 @@ Apply these in order (from tog's principles):
 - Express intent through names and small, focused functions rather than prose
   comments.
 
+## Comments
+
+tog's Rust standard is to avoid source comments and extract complexity into
+well-named entities. Bash has no types to carry that information, so comments
+are more acceptable here — but the intent is the same:
+
+- Express meaning through names and small, focused functions first
+  (`ensure_shebang`, not a comment above a wrapper `printf`).
+- Reserve comments for what a name cannot say: non-obvious constraints,
+  invariants, and deliberate choices. Do not describe what the code does.
+- If a reader needs a comment to understand a block, extract the block into a
+  well-named function instead.
+
 ## Bash scripts
 
 - Start executable scripts with `#!/usr/bin/env bash` and `set -euo pipefail`.
