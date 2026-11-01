@@ -65,6 +65,9 @@ if [[ -n "$ENVIRONMENT" ]]; then
   done
   ENVIRONMENTS=("${filtered[@]}")
 fi
+if ((${#ENVIRONMENTS[@]} == 0)); then
+  mapfile -t ENVIRONMENTS < <(default_environments)
+fi
 [[ "$ACTION" != configure || -n "${ENVIRONMENTS[*]}" ]] || die 'configure requires --environment'
 command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
 command -v jq >/dev/null || die 'Install jq'
@@ -113,6 +116,10 @@ app_service_apps() {
 app_environment_names() {
   # Apps selectable as a configurable environment (have a setup script).
   jq -r 'to_entries[] | select(.value.environment == true) | .key' "$APPS_JSON"
+}
+default_environments() {
+  # Environment apps loaded by default when none are specified.
+  jq -r 'to_entries[] | select(.value.environment == true and .value.default == true) | .key' "$APPS_JSON"
 }
 app_service_field() {
   jq -r --arg app "$1" --arg field "$2" '.[$app].service[$field] // empty' "$APPS_JSON"
@@ -324,7 +331,7 @@ case "$ACTION" in
     [[ "$OPENCODE" == true ]] && app_args+=(opencode)
     if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
     materialize_tool_env_files
-    [[ -z "$ENVIRONMENT" ]] || configure_environment
+    [[ -z "${ENVIRONMENTS[*]}" ]] || configure_environment
     restart_service_apps
     ;;
   configure) configure_environment;;

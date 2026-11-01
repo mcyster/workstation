@@ -22,6 +22,7 @@
   "tog": {
     "env": true,
     "environment": true,
+    "default": true,
     "setup": "app/tog/setup.sh"
   }
 }
