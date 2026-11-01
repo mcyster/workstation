@@ -146,6 +146,30 @@ OPENCODE_API_KEY=... scripts/workstation configure main --environment tog
 
 Environment scripts are trusted code with access to the secrets they declare. Protect the corresponding GitHub Environment and review script changes before running them.
 
+## Tool environment files
+
+Tools read plain `.env` files on the workstation rather than requiring every key as a named GitHub secret. Each registered tool has one fixed-name secret `WORKSTATION_ENV_<TOOL>` whose value is the `.env` content, and configure writes it to `~/.env.<tool>` (mode 600) and sources it for the environment script.
+
+| Tool | Secret (value = file content) | Workstation file |
+| --- | --- | --- |
+| code | `WORKSTATION_ENV_CODE` | `~/.env.code` |
+| opencode | `WORKSTATION_ENV_OPENCODE` | `~/.env.opencode` |
+| tog | `WORKSTATION_ENV_TOG` | `~/.env.tog` |
+
+Secrets are stored at **repository level**; every `configure` job sees them, so one value per tool is all that's needed.
+
+### Push from a machine that holds the secrets
+
+Keep the raw values (and any repository holding them, such as a private `secrets` repo) only on your machine, never on a workstation. Upload them to GitHub repository secrets with:
+
+```sh
+scripts/workstation-secrets-push                # all tools, repo-level
+scripts/workstation-secrets-push opencode tog  # just those tools
+scripts/workstation-secrets-push --dir ~/secrets   # read ~/secrets/.env.<tool>
+```
+
+The tool reads `~/.env.<TOOL>` (or `--dir`/`.env.<TOOL>`), uploads only files whose fingerprint changed (so repeated runs are no-ops), never prints values, and requires confirmation. It needs the GitHub CLI (`gh`), included in the development shell.
+
 ## Browser access
 
 Browser apps are served through **Caddy**, which terminates TLS (self-signed) and requires HTTP basic auth with a single shared browser-apps password:
