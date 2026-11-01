@@ -1,0 +1,12 @@
+{
+  "env": true,
+  "packages": ["nix-bin", "gh"],
+  "service": {
+    "port": 8444,
+    "upstream": "127.0.0.1:4096",
+    "user": "developer",
+    "working_dir": "/home/developer",
+    "path": "/nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/developer/scripts:/home/developer/.local/bin",
+    "exec": ["/home/developer/.opencode/bin/opencode", "serve", "--service", "--hostname", "127.0.0.1", "--port", "4096"]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "env": true,
+  "service": {
+    "port": 8443,
+    "upstream": "127.0.0.1:8080",
+    "user": "developer",
+    "working_dir": "/home/developer",
+    "path": "/nix/var/nix/profiles/default/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/developer/scripts:/home/developer/.local/bin",
+    "exec": ["/usr/bin/code-server", "--config", "/home/developer/.config/code-server/config.yaml"]
+  }
+}

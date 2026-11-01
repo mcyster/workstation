@@ -24,7 +24,7 @@ on:
         type: boolean
         default: true
       environment:
-        description: Comma-separated environment apps from apps.json to configure, in order
+        description: Comma-separated environment apps from app/*/config.json to configure, in order
         type: string
         required: false
 permissions:
@@ -113,14 +113,17 @@ jobs:
           environment_input="${environment_input//$'\n'/ }"
           read -r -a candidate_names <<< "$environment_input"
           if ((${#candidate_names[@]} == 0)); then
-            mapfile -t candidate_names < <(jq -r 'to_entries[] | select(.value.environment == true and .value.default == true) | .key' apps.json)
+            mapfile -t candidate_names < <(for dir in app/*/; do
+              [[ -f "$dir/config.json" ]] && jq -e '.environment == true and .default == true' "$dir/config.json" >/dev/null 2>&1 && basename "$dir"
+            done)
           fi
           environment_names=()
           for name in "${candidate_names[@]}"; do
             [[ -n "$name" ]] || continue
             [[ "$name" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "::error::Invalid environment name: $name"; exit 1; }
-            jq -e --arg app "$name" '.[$app].environment == true' apps.json >/dev/null 2>&1 || { echo "::error::$name is not a configurable environment app"; exit 1; }
-            setup="$(jq -r --arg app "$name" '.[$app].setup // empty' apps.json)"
+            config="app/$name/config.json"
+            jq -e '.environment == true' "$config" >/dev/null 2>&1 || { echo "::error::$name is not a configurable environment app"; exit 1; }
+            setup="$(jq -r '.setup // empty' "$config")"
             [[ -n "$setup" && -f "$setup" ]] || { echo "::error::No setup script for app $name"; exit 1; }
             for seen in "${environment_names[@]}"; do [[ "$seen" == "$name" ]] && continue 2; done
             environment_names+=("$name")
