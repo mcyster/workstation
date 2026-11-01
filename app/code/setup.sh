@@ -3,9 +3,15 @@
 # Runs as root on the workstation.
 set -euo pipefail
 
-if ! command -v code-server >/dev/null; then
+ensure_shebang() {
+  printf '#!/bin/sh\nexec /usr/lib/code-server/bin/code-server "$@"\n' > /usr/bin/code-server
+  chmod 755 /usr/bin/code-server
+}
+
+if [[ ! -x /usr/lib/code-server/bin/code-server ]]; then
   curl -fsSL https://code-server.dev/install.sh | sh >/dev/null
 fi
+ensure_shebang
 
 conftig=/home/developer/.config/code-server/config.yaml
 install -d -m 0700 -o developer -g developer "$(dirname "$conftig")"

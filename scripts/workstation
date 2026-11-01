@@ -154,6 +154,7 @@ materialize_tool_env_files() {
   # Write tool env files now (e.g. right after create, without an environment
   # script), using whatever WORKSTATION_ENV_<TOOL> values are in the CLI's
   # environment. No-op when none are set.
+  ensure_setup                      # developer must exist before sudo -u developer
   [[ "$(status)" == RUNNING ]] || return 0
   (
     umask 077
@@ -320,8 +321,8 @@ case "$ACTION" in
     app_args=()
     [[ "$WEB" == true ]] && app_args+=(code)
     [[ "$OPENCODE" == true ]] && app_args+=(opencode)
-    materialize_tool_env_files
     if ((${#app_args[@]})); then rotate "${app_args[@]}"; else ensure_setup; fi
+    materialize_tool_env_files
     [[ -z "$ENVIRONMENT" ]] || configure_environment
     restart_service_apps
     ;;
