@@ -6,19 +6,9 @@ Workstation provides a persistent, remotely hosted development environment acces
 
 ## Usage
 
-Manage a workstation from **Actions → Workstation → Run workflow**. GitHub Actions lets you bootstrap and manage the environment using only a browser, without installing local tools. Create, start, stop, set up browser access, issue a new password, or destroy the workstation there; the workflow summary links to its browser interface.
+Manage a workstation from **Actions → Workstation → Run workflow** using only a browser — create, start, stop, enable browser access, configure environments, rotate the shared password, or destroy. The run summary links to the workstation's browser interface.
 
-Or use the command line:
-
-```sh
-scripts/workstation create main --web-terminal
-scripts/workstation shell main
-scripts/workstation opencode main
-scripts/workstation idle-shutdown main
-scripts/workstation stop main
-scripts/workstation start main
-scripts/workstation destroy main
-```
+All the detail — the app registry, environments, browser apps, and the local `workstation` CLI — lives in [docs/workstation.md](docs/workstation.md).
 
 ## Setup
 
