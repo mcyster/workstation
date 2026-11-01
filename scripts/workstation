@@ -80,10 +80,10 @@ wait_ssh() {
   wait_ssh_for "$INSTANCE"
 }
 ensure_bucket() {
-  # The image bucket is provisioned by the Infra workflow (apply-infra), not by
+  # The image bucket is provisioned by the Infra workflow (provision), not by
   # instance lifecycle. Fail loudly when the project is not bootstrapped yet.
   if ! gsutil ls -b "gs://$BUCKET" >/dev/null 2>&1; then
-    die "Image bucket gs://$BUCKET is missing. Run the Infra workflow (infra/workstation/apply-infra) once for this project first."
+    die "Image bucket gs://$BUCKET is missing. Run the Infra workflow (infra/workstation/provision) once for this project first."
   fi
 }
 image_name() {
@@ -141,7 +141,7 @@ web_access() {
   # The workstation-web firewall rule (tcp:443 to this tag) is provisioned by
   # the Infra workflow, not created here.
   if ! gcloud compute firewall-rules describe "$TAG" --project "$PROJECT" >/dev/null 2>&1; then
-    die 'Infrastructure is not provisioned: missing firewall rule '$TAG'. Run the Infra workflow (infra/workstation/apply-infra) first.'
+    die 'Infrastructure is not provisioned: missing firewall rule '$TAG'. Run the Infra workflow (infra/workstation/provision) first.'
   fi
   web="$(random_password)"
   recovery="$(random_password)"

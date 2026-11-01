@@ -49,7 +49,7 @@ jobs:
           fi
           args=(--project "$PROJECT" --repo "${{ github.repository }}")
           if [[ "$mode" == check ]]; then args+=(--check); fi
-          bash infra/workstation/apply-infra "${args[@]}" | tee infra-output.txt
+          bash infra/workstation/provision "${args[@]}" | tee infra-output.txt
           {
             echo "## Infrastructure ($mode)"
             sed -n 's/^GitHub Repository Variables/### GitHub Repository Variables/p' infra-output.txt

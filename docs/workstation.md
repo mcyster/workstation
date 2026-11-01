@@ -113,7 +113,7 @@ owns the repository, then run:
 git clone https://github.com/OWNER/workstation.git
 cd workstation
 
-bash infra/workstation/apply-infra \
+bash infra/workstation/provision \
   --project PROJECT \
   --repo OWNER/workstation
 ```
@@ -296,7 +296,7 @@ a known-good image to boot from.
 - `nixos/configuration.nix` — the complete workstation (enables extensions).
 - `nixos/extensions/` — optional workstation modules.
 - `scripts/workstation` — instance lifecycle, images, SSH, password rotation.
-- `infra/workstation/apply-infra` — provisions the static Google Cloud
+- `infra/workstation/provision` — provisions the static Google Cloud
   infrastructure (APIs, identity, IAM, image bucket, firewall rule).
 - `infra/workstation/deploy` — pushes the flake to `/etc/nixos` on the instance
   and runs `nixos-rebuild switch`; runtime credentials in `/var/lib/workstation`

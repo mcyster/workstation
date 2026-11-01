@@ -60,8 +60,19 @@ Apply these in order:
 ## Structure and documentation
 
 - Keep durable documentation in `docs/`.
-- Keep the provisioning script self-contained: `infra/workstation/setup` runs
-  as a GCE startup script with no repository access.
+
+## Infrastructure
+
+- Manage all Google Cloud infrastructure as code in this repository. Identity,
+  IAM, buckets, roles, and firewall rules are declared in `infra/` and are
+  provisioned only by `infra/workstation/provision` — through the Infra
+  workflow, or the documented one-time bootstrap when a project is new.
+- Do not provision, modify, or delete project-level resources with ad-hoc
+  cloud CLI commands, in personal shells, or from instance lifecycle scripts.
+  The workstation CLI creates and destroys instances only.
+- Change infrastructure through a pull request, like any other code. When
+  infrastructure is missing or drifts, fix the repository and let the Infra
+  workflow converge the project; never point-fix a live project by hand.
 
 ## Change discipline
 
@@ -94,13 +105,10 @@ Run these before opening a pull request:
 
 ```sh
 # every Bash script
-bash -n scripts/workstation app/*/setup.sh infra/workstation/*
-
+bash -n scripts/workstation infra/workstation/*
 # every Bash script
 shellcheck scripts/workstation
-shellcheck app/*/setup.sh
 shellcheck infra/workstation/*
-
 # every workflow
 actionlint .github/workflows/*.yml
 ```
