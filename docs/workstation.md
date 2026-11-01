@@ -156,15 +156,14 @@ Tools read plain `.env` files on the workstation rather than requiring every key
 | opencode | `WORKSTATION_ENV_OPENCODE` | `~/.env.opencode` |
 | tog | `WORKSTATION_ENV_TOG` | `~/.env.tog` |
 
-Secret values live at repository level by default; a GitHub Environment can override a tool by defining the same secret name in that environment.
+Secrets are stored at **repository level**; every `configure` job sees them, so one value per tool is all that's needed.
 
 ### Push from a machine that holds the secrets
 
-Keep the raw values (and any repository holding them, such as a private `secrets` repo) only on your machine, never on a workstation. Upload them to GitHub secrets with:
+Keep the raw values (and any repository holding them, such as a private `secrets` repo) only on your machine, never on a workstation. Upload them to GitHub repository secrets with:
 
 ```sh
 scripts/push-environment-secrets                # all tools, repo-level
-scripts/push-environment-secrets --env tog     # into GitHub Environment tog
 scripts/push-environment-secrets opencode tog  # just those tools
 scripts/push-environment-secrets --dir ~/secrets   # read ~/secrets/.env.<tool>
 ```
