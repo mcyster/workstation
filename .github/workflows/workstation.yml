@@ -3,10 +3,10 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Action (web-terminal sets up access and issues a new password)
+        description: Action (web-terminal sets up browser access and issues a new password)
         type: choice
         required: true
-        options: [create, configure, idle-shutdown, opencode, start, stop, web-terminal, list, destroy]
+        options: [create, configure, start, stop, web-terminal, list, recover, destroy]
       name:
         description: Workstation name
         type: string
@@ -15,18 +15,14 @@ on:
         description: GCE machine type for create
         type: string
         default: e2-standard-2
-      web_terminal:
-        description: Browser editor on create
-        type: boolean
-        default: true
-      opencode:
-        description: OpenCode web UI on create
-        type: boolean
-        default: true
-      environment:
-        description: Comma-separated environment apps from app/*/config.json to configure, in order
+      boot_disk_size:
+        description: GCE boot disk size in GB for create
         type: string
-        required: false
+        default: "100"
+      web_terminal:
+        description: Set up browser access on create
+        type: boolean
+        default: true
 permissions:
   id-token: write
   contents: read
@@ -41,145 +37,54 @@ jobs:
       ACTION: ${{ inputs.action }}
       NAME: ${{ inputs.name }}
       MACHINE_TYPE: ${{ inputs.machine_type }}
+      BOOT_DISK_SIZE: ${{ inputs.boot_disk_size }}
       WEB_TERMINAL: ${{ inputs.web_terminal }}
-      OPENCODE: ${{ inputs.opencode }}
-      WORKSTATION_ENV_CODE: ${{ secrets.WORKSTATION_ENV_CODE }}
-      WORKSTATION_ENV_OPENCODE: ${{ secrets.WORKSTATION_ENV_OPENCODE }}
-      WORKSTATION_ENV_TOG: ${{ secrets.WORKSTATION_ENV_TOG }}
-      ENVIRONMENT: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - name: Check cloud configuration
         shell: bash
         run: |
           for variable in PROJECT PROVIDER SERVICE_ACCOUNT; do
             if [[ -z "${!variable}" ]]; then echo "::error::$variable is not configured"; exit 1; fi
           done
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ env.PROVIDER }}
           service_account: ${{ env.SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Install Nix
+        # Only create and recover build the base NixOS disk image.
+        if: ${{ inputs.action == 'create' || inputs.action == 'recover' }}
+        uses: determinatesystems/nix-installer-action@v23
       - name: Manage workstation
         shell: bash
         run: |
-          if [[ "$ACTION" == configure ]]; then
-            echo "environment: ${ENVIRONMENT:-<default apps>}" > output.txt
-          else
-            args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
-            if [[ "$ACTION" == create ]]; then
-              args+=(--machine-type "$MACHINE_TYPE")
-              [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
-              [[ "$OPENCODE" != true ]] || args+=(--opencode)
-            fi
-            if [[ "$ACTION" == destroy ]]; then args+=(--yes); fi
-            bash scripts/workstation "${args[@]}" > output.txt
+          args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
+          if [[ "$ACTION" == create ]]; then
+            args+=(--machine-type "$MACHINE_TYPE" --boot-disk-size "$BOOT_DISK_SIZE")
+            [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)
           fi
+          if [[ "$ACTION" == destroy || "$ACTION" == recover ]]; then args+=(--yes); fi
+          bash scripts/workstation "${args[@]}" > output.txt
           {
             echo "## Workstation $NAME"
             echo "- Action: $ACTION"
             echo "- Project: $PROJECT"
             echo "- Zone: $ZONE"
+            sed -n 's/^browser: /- Browser: /p' output.txt
+            sed -n 's/^password: /- Password: /p' output.txt
+            sed -n 's/^recovery: /- Recovery: /p' output.txt
             echo '### Machines'
-            echo '| Name | Status | Machine type | Zone | IP | Password | Web terminal | OpenCode |'
+            echo '| Name | Status | Machine type | Zone | IP | Browser | Password | Recovery |'
             echo '| --- | --- | --- | --- | --- | --- | --- | --- |'
-            while IFS=, read -r machine status machine_type zone ip web_terminal opencode password; do
+            while IFS=, read -r machine status machine_type zone ip browser password recovery; do
               [[ -n "$machine" ]] || continue
+              browser_link='—'
               password_link='—'
-              web_terminal_link='—'
-              opencode_link='—'
+              recovery_link='—'
+              [[ -z "$browser" ]] || browser_link="[Open]($browser)"
               [[ -z "$password" ]] || password_link="[Secret Manager]($password)"
-              [[ -z "$web_terminal" ]] || web_terminal_link="[Open]($web_terminal)"
-              [[ -z "$opencode" ]] || opencode_link="[Open]($opencode)"
-              echo "| $machine | $status | $machine_type | $zone | $ip | $password_link | $web_terminal_link | $opencode_link |"
+              [[ -z "$recovery" ]] || recovery_link="[Secret Manager]($recovery)"
+              echo "| $machine | $status | $machine_type | $zone | $ip | $browser_link | $password_link | $recovery_link |"
             done < <(bash scripts/workstation list --project "$PROJECT" || true)
-          } >> "$GITHUB_STEP_SUMMARY"
-  discover_environment:
-    needs: workstation
-    if: ${{ always() && needs.workstation.result == 'success' && (inputs.action == 'create' || inputs.action == 'configure') }}
-    runs-on: ubuntu-latest
-    outputs:
-      environments: ${{ steps.secrets.outputs.environments }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Read environment requirements
-        id: secrets
-        shell: bash
-        env:
-          ENVIRONMENT: ${{ inputs.environment }}
-        run: |
-          set -euo pipefail
-          environment_input="${ENVIRONMENT//[, ]/ }"
-          environment_input="${environment_input//$'\n'/ }"
-          read -r -a candidate_names <<< "$environment_input"
-          if ((${#candidate_names[@]} == 0)); then
-            mapfile -t candidate_names < <(for dir in app/*/; do
-              [[ -f "$dir/config.json" ]] && jq -e '.environment == true and .default == true' "$dir/config.json" >/dev/null 2>&1 && basename "$dir"
-            done)
-          fi
-          environment_names=()
-          for name in "${candidate_names[@]}"; do
-            [[ -n "$name" ]] || continue
-            [[ "$name" =~ ^[a-z]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "::error::Invalid environment name: $name"; exit 1; }
-            config="app/$name/config.json"
-            jq -e '.environment == true' "$config" >/dev/null 2>&1 || { echo "::error::$name is not a configurable environment app"; exit 1; }
-            setup="$(jq -r '.setup // empty' "$config")"
-            [[ -n "$setup" && -f "$setup" ]] || { echo "::error::No setup script for app $name"; exit 1; }
-            for seen in "${environment_names[@]}"; do [[ "$seen" == "$name" ]] && continue 2; done
-            environment_names+=("$name")
-          done
-          ((${#environment_names[@]})) || { echo '::error::No environments given'; exit 1; }
-
-          environment_list_json='['
-          separator=''
-          for index in "${!environment_names[@]}"; do
-            environment_list_json+="${separator}\"${environment_names[$index]}\""
-            separator=','
-          done
-          environment_list_json+=']'
-          printf 'environments=%s\n' "$environment_list_json" >> "$GITHUB_OUTPUT"
-  configure:
-    needs: [workstation, discover_environment]
-    if: ${{ always() && needs.workstation.result == 'success' && needs.discover_environment.result == 'success' }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        environment: ${{ fromJson(needs.discover_environment.outputs.environments || '[]') }}
-    environment: ${{ matrix.environment }}
-    env:
-      PROJECT: ${{ vars.WORKSTATION_GCLOUD_PROJECT }}
-      ZONE: ${{ vars.WORKSTATION_GCLOUD_ZONE || 'us-central1-a' }}
-      PROVIDER: ${{ secrets.WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
-      SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
-      NAME: ${{ inputs.name }}
-      ENVIRONMENT: ${{ matrix.environment }}
-      WORKSTATION_ENV_CODE: ${{ secrets.WORKSTATION_ENV_CODE }}
-      WORKSTATION_ENV_OPENCODE: ${{ secrets.WORKSTATION_ENV_OPENCODE }}
-      WORKSTATION_ENV_TOG: ${{ secrets.WORKSTATION_ENV_TOG }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Check cloud configuration
-        shell: bash
-        run: |
-          for variable in PROJECT PROVIDER SERVICE_ACCOUNT; do
-            if [[ -z "${!variable}" ]]; then echo "::error::$variable is not configured"; exit 1; fi
-          done
-      - uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ env.PROVIDER }}
-          service_account: ${{ env.SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v3
-      - name: Configure environment
-        shell: bash
-        run: |
-          bash scripts/workstation configure "$NAME" \
-            --project "$PROJECT" \
-            --zone "$ZONE" \
-            --environment "$ENVIRONMENT" > output.txt
-          {
-            echo "## Environment $ENVIRONMENT"
-            echo "- Workstation: $NAME"
-            echo "- Project: $PROJECT"
-            sed -n 's/^environment: /- Applied: /p' output.txt
           } >> "$GITHUB_STEP_SUMMARY"

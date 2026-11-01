@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Deploy the workstation flake to a running NixOS instance.
+#
+# Copies the flake sources (flake.nix, flake.lock, nixos/) to /etc/nixos and
+# runs a normal `nixos-rebuild switch`. The flake sources are rebuilt on the
+# instance from the committed flake.lock, so nothing secret lives in the store.
+#
+# /etc/nixos holds the deployed configuration; runtime credentials live
+# separately under /var/lib/workstation and are never touched here.
+set -euo pipefail
+
+PROGRAM="${0##*/}"
+INSTANCE=""
+PROJECT=""
+ZONE=""
+REPO=""
+
+usage() {
+  cat <<EOF
+Usage: $PROGRAM --instance NAME --project PROJECT --zone ZONE [--repo DIR]
+
+Deploy the current repository's flake to a running NixOS workstation.
+EOF
+}
+
+usage_error() {
+  printf '%s: %s\n\n' "$PROGRAM" "$1" >&2
+  usage >&2
+  exit 2
+}
+
+while (($#)); do
+  case "$1" in
+    --instance) (($# >= 2)) || usage_error "Missing value for $1"; INSTANCE="$2"; shift 2;;
+    --instance=*) INSTANCE="${1#*=}"; shift;;
+    --project) (($# >= 2)) || usage_error "Missing value for $1"; PROJECT="$2"; shift 2;;
+    --project=*) PROJECT="${1#*=}"; shift;;
+    --zone) (($# >= 2)) || usage_error "Missing value for $1"; ZONE="$2"; shift 2;;
+    --zone=*) ZONE="${1#*=}"; shift;;
+    --repo) (($# >= 2)) || usage_error "Missing value for $1"; REPO="$2"; shift 2;;
+    --repo=*) REPO="${1#*=}"; shift;;
+    -h|--help) usage; exit 0;;
+    *) usage_error "Unknown argument: $1";;
+  esac
+done
+[[ -n "$INSTANCE" && -n "$PROJECT" && -n "$ZONE" ]] || usage_error "--instance, --project, and --zone are required"
+[[ -n "$REPO" ]] || REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+GC=(--project "$PROJECT" --zone "$ZONE")
+bundle="$(mktemp -d)"
+trap 'rm -rf "$bundle"' EXIT
+
+# Only the flake sources are needed to rebuild the workstation.
+(cd "$REPO" && tar czf "$bundle/workstation.tar.gz" flake.nix flake.lock nixos)
+
+gcloud compute scp "$bundle/workstation.tar.gz" "developer@$INSTANCE:/tmp/workstation.tar.gz" "${GC[@]}" --quiet
+
+gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' <<'REMOTE'
+set -euo pipefail
+# sudo resets the environment; put the system tools back on PATH.
+export PATH="/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:$PATH"
+
+# Only the deployed configuration is replaced. Runtime credentials such as
+# /var/lib/workstation/caddy.env and /var/lib/workstation/recovery-password
+# live in a separate directory and are preserved across deploys.
+rm -rf /etc/nixos
+mkdir -p /etc/nixos
+tar xzf /tmp/workstation.tar.gz -C /etc/nixos
+rm -f /tmp/workstation.tar.gz
+
+echo 'Switching the workstation to the flake configuration...'
+nixos-rebuild switch --flake /etc/nixos#workstation
+REMOTE
+
+echo "deployed: $INSTANCE"
