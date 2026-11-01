@@ -1,0 +1,17 @@
+name: Flake check
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: determinatesystems/nix-installer-action@v23
+      - name: Evaluate and build checks
+        # `nix flake check` evaluates all outputs and builds the checks:
+        # the complete workstation system closure and the GCE base image.
+        run: nix flake check

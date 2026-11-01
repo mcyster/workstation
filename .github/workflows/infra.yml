@@ -1,0 +1,57 @@
+name: Infra
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Apply or check (check verifies without creating)'
+        type: choice
+        required: true
+        default: check
+        options: [check, apply]
+  pull_request:
+    branches: [main]
+    paths: [infra/**]
+  push:
+    branches: [main]
+    paths: [infra/**]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT: ${{ vars.WORKSTATION_GCLOUD_PROJECT }}
+      PROVIDER: ${{ secrets.WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+      SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check cloud configuration
+        shell: bash
+        run: |
+          for variable in PROJECT PROVIDER SERVICE_ACCOUNT; do
+            if [[ -z "${!variable}" ]]; then echo "::error::$variable is not configured"; exit 1; fi
+          done
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Provision infrastructure
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          # PRs verify; merges and manual dispatch apply.
+          mode="${MODE:-}"
+          if [[ -z "$mode" ]]; then
+            if [[ "${{ github.event_name }}" == "push" ]]; then mode=apply; else mode=check; fi
+          fi
+          args=(--project "$PROJECT" --repo "${{ github.repository }}")
+          if [[ "$mode" == check ]]; then args+=(--check); fi
+          bash infra/workstation/apply-infra "${args[@]}" | tee infra-output.txt
+          {
+            echo "## Infrastructure ($mode)"
+            sed -n 's/^GitHub Repository Variables/### GitHub Repository Variables/p' infra-output.txt
+            sed -n 's/^GitHub Repository Secrets/### GitHub Repository Secrets/p' infra-output.txt
+          } >> "$GITHUB_STEP_SUMMARY"
