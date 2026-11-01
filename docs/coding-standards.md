@@ -1,17 +1,10 @@
 # Coding Standards
 
-Coding standards for this repository, adapted from the
-[`mcyster/tog`](https://github.com/mcyster/tog) repository's
-[`AGENTS.md`](https://github.com/mcyster/tog/blob/main/AGENTS.md),
-[`docs/development-standards.md`](https://github.com/mcyster/tog/blob/main/docs/development-standards.md),
-and
-[`docs/principles.md`](https://github.com/mcyster/tog/blob/main/docs/principles.md).
-tog states the standards for Rust; this document applies the same priorities to
-this repository's Bash scripts and GitHub Actions workflows.
+Coding standards for this repository.
 
 ## Priorities
 
-Apply these in order (from tog's principles):
+Apply these in order:
 
 1. **Readability and understandability.** The code should carry most of the
    explanation of its structure and behavior.
@@ -39,6 +32,17 @@ Apply these in order (from tog's principles):
 - Express intent through names and small, focused functions rather than prose
   comments.
 
+## Comments
+
+- Do not add comments to source files where a well-named entity can carry the
+  meaning instead. Extract complexity into named functions and constants.
+- Minimize comments overall; Bash has no types to convey some constraints, so
+  a short comment is acceptable when no name can express the reason.
+- Reserve comments for what a name cannot say: non-obvious constraints,
+  invariants, and deliberate choices. Do not describe what the code does.
+- If a reader needs a comment to understand a block, extract the block into a
+  well-named function instead.
+
 ## Bash scripts
 
 - Start executable scripts with `#!/usr/bin/env bash` and `set -euo pipefail`.
@@ -63,7 +67,7 @@ Apply these in order (from tog's principles):
 
 The intent: every change lands through review, stays within its own scope, and
 removes what it supersedes, so the default branch keeps a coherent history and
-no speculative or dead machinery accumulates. Rules from tog:
+no speculative or dead machinery accumulates.
 
 - Make repository changes in a linked git worktree on a branch and submit them
   through a pull request. Do not commit directly to the default branch.
