@@ -1,5 +1,5 @@
 {
-  "packages": ["gh"],
+  "packages": ["gh", "nix-bin"],
   "code": {
     "env": true,
     "service": {
