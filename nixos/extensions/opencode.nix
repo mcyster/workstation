@@ -50,10 +50,9 @@ in
 
     # The server rejects anonymous access; the site stays closed until
     # `web-access` rotates in a shared password and restarts the service.
-    # OpenCode always authenticates the user as `opencode` (the
-    # OPENCODE_SERVER_USERNAME value is ignored by `serve`).
+    # Browsers sign in as `user` with that password.
     systemd.tmpfiles.rules = [
-      "f ${cfg.environmentFile} 0600 root root - OPENCODE_SERVER_USERNAME=opencode\nOPENCODE_SERVER_PASSWORD=0trl0sXVVSLxHTkFwYkM"
+      "f ${cfg.environmentFile} 0600 root root - OPENCODE_SERVER_USERNAME=user\nOPENCODE_SERVER_PASSWORD=0trl0sXVVSLxHTkFwYkM"
     ];
 
     # The opencode secret (OPENROUTER_API_KEY, GH_TOKEN, ...) is loaded from

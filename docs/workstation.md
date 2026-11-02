@@ -332,7 +332,7 @@ The certificate is self-signed; accept the warning in your browser. All
 services bind to localhost and only Caddy is exposed on HTTPS port 443. The GCE
 firewall rule `workstation-web` (opened when browser access is enabled) is the
 outer gate; NixOS also keeps an internal firewall. Sign in with username
-`opencode` and the current website password.
+`user` and the current website password.
 
 Hashes live in `/var/lib/workstation` (outside the Nix store), and plaintext
 passwords live only in Google Cloud Secret Manager secrets

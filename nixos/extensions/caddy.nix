@@ -90,7 +90,7 @@ in
         extraConfig = ''
           tls ${cert} ${key}
           basic_auth * {
-            opencode {env.WORKSTATION_WEB_PASSWORD_HASH}
+            user {env.WORKSTATION_WEB_PASSWORD_HASH}
           }
           @coder-root {
             path /coder
