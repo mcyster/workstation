@@ -180,6 +180,53 @@ opencode auth login  # configure model providers for OpenCode
 OpenCode and other developer tools share the user's Git and GitHub
 configuration through `~/.config/gh` and `~/.gitconfig`.
 
+### Workstation secrets
+
+Any app or tool on the workstation can consume environment secrets — provider
+API keys, tokens, anything in dotenv form. Secrets are discovered by **name**,
+never by a hardcoded list:
+
+- **From GitHub Actions**: every repository secret whose name starts with
+  `WORKSTATION_ENV_` is loaded. The suffix — lowercased — becomes the secret
+  name: `WORKSTATION_ENV_TOG` becomes `.env.tog`. Unrelated secrets never leave
+  the workflow.
+- **From a terminal**: every `~/.env.*` file in the invoking user's home is
+  loaded, so `~/.env.tog` becomes `.env.tog`.
+
+The `secrets` action (or `scripts/workstation secrets main`) provisions every
+discovered secret to the running workstation, and `create` does the same
+automatically. For each secret two files are written, both outside the Nix
+store and replaced atomically only after validation:
+
+- `/home/developer/.env.NAME` — the original shell content exactly as
+  discovered (export prefixes, comments, and blank lines preserved). Owner
+  `developer:users`, mode `0600`.
+- `/var/lib/workstation/secrets/.env.NAME` — systemd-compatible: optional
+  `export ` prefixes are stripped, comments and blank lines preserved. Owner
+  `root:root`, mode `0600`.
+
+Lines must be `KEY=VALUE` or `export KEY=VALUE` with `KEY` matching
+`[A-Za-z_][A-Za-z0-9_]*`. Values must be a plain token — only letters, digits,
+and `_@%+=.,:/-` — or a fully quoted string (`'…'` or `"…"`). Shell operators
+(& ; | ( ) < > ~ ! # * ? [ ] { }), whitespace, and expansions (`$`, backticks)
+are rejected in bare values because sourcing them would run commands or expand
+differently than systemd reads; quote the value instead. Unterminated or
+embedded quotes are rejected. Comments and blank lines are kept. Anything
+rejected aborts with an error naming the line — never echoing the value — and
+the existing files are left untouched.
+
+After a write, every unit whose `EnvironmentFile` references
+`/var/lib/workstation/secrets/.env.NAME` is restarted; the script discovers
+those units from systemd at runtime (no registry or manifest — the unit
+declaration itself is the source of truth). A secret that no unit references
+(for example a CLI-only tool like `tog`) is written without restarting
+anything. Re-run a secret on a freshly created workstation to restore it.
+
+No empty placeholder env files are generated: services load `.env.NAME` only
+when it exists (their `EnvironmentFile` entries use a `-` prefix, which systemd
+skips for missing files), so a workstation with no secrets configured has no
+secret files at all.
+
 Clone any repository with a Nix flake and work inside its development
 environment:
 
@@ -209,6 +256,8 @@ Use **Actions → Workstation → Run workflow** to run `configure`, `start`,
   with them already included.
 - `web-terminal` enables browser access or issues a new website password and a
   new recovery password.
+- `secrets` provisions every `WORKSTATION_ENV_*` GitHub secret to the instance;
+  `create` does the same automatically.
 - `start` and `stop` preserve the disk.
 - `list` shows every managed instance with its browser URL and Secret Manager
   links.
@@ -238,6 +287,7 @@ scripts/workstation config-ssh main
 scripts/workstation stop main
 scripts/workstation start main
 scripts/workstation web-terminal main
+scripts/workstation secrets main        # provisions ~/.env.* from your home
 scripts/workstation recover main
 scripts/workstation destroy main
 ```
@@ -325,6 +375,8 @@ known-good image to boot from.
   `switch-to-configuration`. Heavy builds happen once on the deploy machine and
   are reused wherever the workstation runs (any zone or new box).
 - `infra/workstation/web-access` — rotates website and recovery passwords.
+- `infra/workstation/secrets` — applies a named workstation secret on the
+  instance (outside the Nix store).
 - `.github/workflows/infra.yml` — applies or checks infrastructure on PRs and
   merges, so infrastructure changes go through code review.
 - `.github/workflows/publish-image.yml` — publishes the bootstrap image after

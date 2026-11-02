@@ -3,10 +3,10 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Action (web-terminal sets up browser access and issues a new password)
+        description: Action (web-terminal sets up browser access and issues a new password; secrets refreshes all WORKSTATION_ENV_* GitHub secrets)
         type: choice
         required: true
-        options: [create, configure, start, stop, web-terminal, list, recover, destroy]
+        options: [create, configure, start, stop, web-terminal, secrets, list, recover, destroy]
       name:
         description: Workstation name
         type: string
@@ -39,6 +39,9 @@ jobs:
       MACHINE_TYPE: ${{ inputs.machine_type }}
       BOOT_DISK_SIZE: ${{ inputs.boot_disk_size }}
       WEB_TERMINAL: ${{ inputs.web_terminal }}
+      # All repository secrets as JSON, filtered below to WORKSTATION_ENV_* so
+      # unrelated secrets never leave this step.
+      SECRETS_JSON: ${{ toJSON(secrets) }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
@@ -58,10 +61,34 @@ jobs:
         # Publish the image with the Publish image workflow when it changes.
         if: ${{ inputs.action == 'configure' }}
         uses: determinatesystems/nix-installer-action@v23
+      - name: Prepare workstation secrets
+        # Discover WORKSTATION_ENV_* secrets into a NAME<TAB>BASE64 payload.
+        # Values are never printed; the payload only drives the secrets action
+        # (and create, which auto-loads secrets).
+        if: ${{ inputs.action == 'create' || inputs.action == 'secrets' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(printf '%s' "$SECRETS_JSON" | jq -r '
+            to_entries
+            | map(select(.key | startswith("WORKSTATION_ENV_")))
+            | map(.name = (.key | sub("^WORKSTATION_ENV_"; "") | ascii_downcase))
+            | map(select(.name | test("^[a-z][a-z0-9_-]*$")))
+            | map(.name + "\t" + (.value | @base64))
+            | .[]
+          ')"
+          if [[ -n "$payload" ]]; then
+            {
+              echo 'WORKSTATION_SECRET_PAYLOAD<<EOF'
+              printf '%s\n' "$payload"
+              echo 'EOF'
+            } >> "$GITHUB_ENV"
+          fi
       - name: Manage workstation
         shell: bash
         run: |
-          args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
+          args=("$ACTION" "$NAME")
+          args+=(--project "$PROJECT" --zone "$ZONE")
           if [[ "$ACTION" == create ]]; then
             args+=(--machine-type "$MACHINE_TYPE" --boot-disk-size "$BOOT_DISK_SIZE")
             [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)

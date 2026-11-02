@@ -38,6 +38,9 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # The coder secret is loaded from /var/lib/workstation/secrets/.env.coder,
+    # written by the `secrets` action. The `-` prefix means the file is loaded
+    # only when it exists.
     systemd.services.workstation-coder = {
       description = "Coder — VS Code in the browser (code-server)";
       wantedBy = [ "multi-user.target" ];
@@ -48,6 +51,7 @@ in
       serviceConfig = {
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
+        EnvironmentFile = [ "-/var/lib/workstation/secrets/.env.coder" ];
         ExecStart = "${lib.getExe cfg.package} --bind-addr ${cfg.host}:${toString cfg.port} --auth none --disable-telemetry ${cfg.workspace}";
         Restart = "on-failure";
         RestartSec = "3s";
