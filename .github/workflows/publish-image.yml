@@ -1,0 +1,44 @@
+name: Publish image
+on:
+  workflow_dispatch:
+    inputs:
+      zone:
+        description: Storage region zone for the image
+        type: string
+        default: us-central1-a
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT: ${{ vars.WORKSTATION_GCLOUD_PROJECT }}
+      ZONE: ${{ inputs.zone }}
+      PROVIDER: ${{ secrets.WORKSTATION_GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+      SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check cloud configuration
+        shell: bash
+        run: |
+          for variable in PROJECT PROVIDER SERVICE_ACCOUNT; do
+            if [[ -z "${!variable}" ]]; then echo "::error::$variable is not configured"; exit 1; fi
+          done
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - uses: determinatesystems/nix-installer-action@v23
+      - name: Publish the bootstrap image
+        shell: bash
+        run: |
+          bash infra/workstation/publish-image \
+            --project "$PROJECT" \
+            --zone "$ZONE" \
+            --repo "$GITHUB_WORKSPACE" | tee publish-output.txt
+          {
+            echo "## Bootstrap image published"
+            sed -n 's/^published bootstrap image: /- Image: /p' publish-output.txt
+          } >> "$GITHUB_STEP_SUMMARY"

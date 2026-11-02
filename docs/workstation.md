@@ -14,16 +14,18 @@ Responsibilities are separated into four layers.
 
 ### 1. Base NixOS workstation
 
-`nixos/base.nix` and `nixos/gce.nix` define a minimal NixOS image for Google
+`nixos/base.nix` and `nixos/gce.nix` define the base NixOS system for Google
 Compute Engine: a `developer` user with passwordless sudo, SSH with GCE-injected
 keys, Nix with flakes, Git, the GitHub CLI, direnv with nix-direnv, basic
-utilities, serial-console recovery, and automatic garbage collection. The image
+utilities, serial-console recovery, and automatic garbage collection. The base
 is generic and has no project-specific logic.
 
 `nix build .#packages.x86_64-linux.gceImage` produces the GCE-compatible disk
-image (`.raw.tar.gz`). The `gce.nix` module imports nixpkgs'
-`google-compute-image` module, so the image and the running system share the
-same disk layout, boot loader, and guest agent.
+image (`.raw.tar.gz`). The image **is the complete workstation** — a bootstrap
+server containing the base system and every enabled extension — so creating a
+workstation just boots it. `gce.nix` imports nixpkgs' `google-compute-image`
+module, so the image and the running system share the same disk layout, boot
+loader, and guest agent.
 
 ### 2. Workstation extensions
 
@@ -144,17 +146,23 @@ these repository settings:
 The bootstrap script is idempotent, but review existing IAM configuration
 before using it in an established project.
 
-### 5. Create the workstation
+### 5. Publish the bootstrap image
+
+The GCE image is the complete workstation, so `create` just boots the latest
+published image. Publish one by selecting **Publish image** in Actions (this
+builds the image on the runner, typically a few minutes, and uploads it to
+your project). Run it whenever the workstation configuration changes.
+
+### 6. Create the workstation
 
 Open the repository's [GitHub Actions page](https://github.com/mcyster/workstation/actions).
 Select **Workstation**, choose **Run workflow**, set the action to `create`, and
 run it. The default name is `main`, and browser access is enabled by default.
 
-Creating a workstation builds the minimal base image on the runner (only when
-its content changes; the image is cached in your GCE project), uploads it,
-boots the instance, applies the full workstation flake, and sets up browser
-access. After the workflow succeeds, open its summary. The summary shows the
-browser URL and Secret Manager links for the website and recovery passwords.
+Creating a workstation boots the latest published bootstrap image (no build on
+the runner) and sets up browser access. After the workflow succeeds, open its
+summary. The summary shows the browser URL and Secret Manager links for the
+website and recovery passwords.
 
 ## Using the workstation
 
@@ -194,9 +202,11 @@ above.
 Use **Actions → Workstation → Run workflow** to run `configure`, `start`,
 `stop`, `web-terminal`, `list`, `recover`, or `destroy` after setup.
 
-- `configure` re-applies the workstation flake to a running instance with a
-  normal `nixos-rebuild switch`. This is how software and service changes in
-  the flake reach a workstation; no new VM image is required.
+- `configure` builds the current flake on the runner and copies the closure to
+  a running instance, then activates it with a normal `switch-to-configuration`.
+  This is how software and service changes in the flake reach workstations;
+  publish a fresh bootstrap image only when you want new workstations to boot
+  with them already included.
 - `web-terminal` enables browser access or issues a new website password and a
   new recovery password.
 - `start` and `stop` preserve the disk.
@@ -232,9 +242,10 @@ scripts/workstation recover main
 scripts/workstation destroy main
 ```
 
-`create` and `recover` build the base NixOS image, so they require a Linux
-machine with Nix and flakes; run them from this repository. Other commands work
-from any machine with `gcloud`. Override `--project`, `--zone`, `--machine-type`, and `--boot-disk-size` per
+`create` and `recover` boot the latest published bootstrap image and never
+build, so they work from any machine with `gcloud`. `configure` builds the flake
+and requires a Linux machine with Nix (the GitHub action handles this).
+Override `--project`, `--zone`, `--machine-type`, and `--boot-disk-size` per
 command. The default name is `main`; `create` refuses to overwrite an existing
 workstation, so destroy it first. `start` preserves the disk; `destroy` asks for
 confirmation (the GitHub action passes `--yes`).
@@ -286,14 +297,14 @@ workstation cannot permanently brick itself:
   `workstation-NAME-recovery-password`) lets `root` log in
   out-of-band from Google Cloud.
 - **Rescue instance.** `scripts/workstation recover main` (or the `recover`
-  action) boots a fresh instance from the known-good base image and attaches
-  your original disk so you can copy files off, before losing anything.
+  action) boots a fresh instance from the known-good bootstrap image and
+  attaches your original disk so you can copy files off, before losing anything.
 - **Recreate.** Because the whole workstation is declared in the flake,
-  destroying and creating a new one reproduces the same system from the cached
-  base image.
+  destroying and creating a new one reproduces the same system from the
+  published bootstrap image.
 
-The minimal base image is always recreatable from the flake, so there is always
-a known-good image to boot from.
+The bootstrap image is always recreatable from the flake, so there is always a
+known-good image to boot from.
 
 ## Repository layout
 
@@ -303,9 +314,12 @@ a known-good image to boot from.
 - `nixos/configuration.nix` — the complete workstation (enables extensions).
 - `nixos/extensions/` — optional workstation modules (opencode, coder, caddy,
   browser terminal, idle shutdown).
-- `scripts/workstation` — instance lifecycle, images, SSH, password rotation.
+- `scripts/workstation` — instance lifecycle, SSH, password rotation, using the
+  published bootstrap image.
 - `infra/workstation/provision` — provisions the static Google Cloud
   infrastructure (APIs, identity, IAM, image bucket, firewall rule).
+- `infra/workstation/publish-image` — builds and uploads the complete
+  workstation as the bootstrap GCE image.
 - `infra/workstation/deploy` — builds the workstation flake locally, copies
   the closure to the instance, and activates it with a normal
   `switch-to-configuration`. Heavy builds happen once on the deploy machine and
@@ -313,6 +327,8 @@ a known-good image to boot from.
 - `infra/workstation/web-access` — rotates website and recovery passwords.
 - `.github/workflows/infra.yml` — applies or checks infrastructure on PRs and
   merges, so infrastructure changes go through code review.
+- `.github/workflows/publish-image.yml` — publishes the bootstrap image after
+  workstation changes.
 - `.github/workflows/workstation.yml` — manual workstation action using Workload
   Identity Federation.
 

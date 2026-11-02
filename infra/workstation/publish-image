@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Publish the complete workstation GCE image ("bootstrap server").
+#
+# The GCE image contains the whole workstation — base system and every
+# extension — so `create` and `recover` boot it directly without any build.
+# This script is run occasionally (via the Publish image workflow, or by an
+# admin with Nix) whenever the workstation configuration changes.
+set -euo pipefail
+
+PROGRAM="${0##*/}"
+PROJECT=""
+ZONE="us-central1-a"
+REPO=""
+SYSTEM="x86_64-linux"
+BUCKET_PREFIX="workstation-images"
+KEEP_IMAGES=3
+
+usage() {
+  cat <<EOF
+Usage: $PROGRAM --project PROJECT [--zone ZONE] [--repo DIR]
+
+Build the complete workstation and publish it as the project's bootstrap GCE
+image (labeled workstation-bootstrap=true). Requires Linux, Nix with flakes,
+and the provisioned image bucket.
+EOF
+}
+
+usage_error() {
+  printf '%s: %s\n\n' "$PROGRAM" "$1" >&2
+  usage >&2
+  exit 2
+}
+
+die() { echo "$PROGRAM: $*" >&2; exit 1; }
+
+while (($#)); do
+  case "$1" in
+    --project) (($# >= 2)) || usage_error "Missing value for $1"; PROJECT="$2"; shift 2;;
+    --project=*) PROJECT="${1#*=}"; shift;;
+    --zone) (($# >= 2)) || usage_error "Missing value for $1"; ZONE="$2"; shift 2;;
+    --zone=*) ZONE="${1#*=}"; shift;;
+    --repo) (($# >= 2)) || usage_error "Missing value for $1"; REPO="$2"; shift 2;;
+    --repo=*) REPO="${1#*=}"; shift;;
+    -h|--help) usage; exit 0;;
+    *) usage_error "Unknown argument: $1";;
+  esac
+done
+[[ -n "$PROJECT" ]] || usage_error "--project is required"
+[[ -n "$REPO" ]] || REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
+command -v nix >/dev/null || die 'nix is required to build the image (Linux with flakes)'
+[[ "$(uname -s)" == Linux ]] || die 'Building the GCE image requires Linux'
+
+BUCKET="$BUCKET_PREFIX-$PROJECT"
+if ! gcloud storage buckets describe "gs://$BUCKET" --project "$PROJECT" --format='value(name)' >/dev/null 2>&1; then
+  die "Image bucket gs://$BUCKET is missing. Provision infrastructure with the Infra workflow (infra/workstation/provision) first."
+fi
+
+echo "Building the complete workstation image..." >&2
+out="$(cd "$REPO" && nix build ".#packages.$SYSTEM.gceImage" --no-link --print-out-paths)"
+file="$(find "$out" -maxdepth 1 -type f -name '*.raw.tar.gz' -o -maxdepth 1 -type f -name '*.tar.gz' | head -1)"
+[[ -n "$file" ]] || die "Image artifact not found in $out"
+
+hash="$(basename "$out" | cut -d- -f1)"
+IMG="nixos-bootstrap-${hash:0:10}"
+
+if gcloud compute images describe "$IMG" --project "$PROJECT" >/dev/null 2>&1; then
+  echo "already published: $IMG" >&2
+else
+  echo "Uploading $IMG..." >&2
+  gsutil -q cp "$file" "gs://$BUCKET/${IMG}.tar.gz"
+  gcloud compute images create "$IMG" --project "$PROJECT" \
+    --source-uri "gs://$BUCKET/${IMG}.tar.gz" \
+    --storage-location "${ZONE%-*}" \
+    --labels "workstation-bootstrap=true,managed-workstation=true"
+fi
+
+# Keep only the newest bootstrap images; older ones are superseded.
+gcloud compute images list --project "$PROJECT" \
+  --filter='labels.workstation-bootstrap=true' \
+  --format='value(name)' --sort-by=~creationTimestamp \
+  | tail -n +$((KEEP_IMAGES + 1)) \
+  | while IFS= read -r old; do
+      [[ -n "$old" ]] || continue
+      echo "removing old image: $old" >&2
+      gcloud compute images delete "$old" --project "$PROJECT" --quiet >/dev/null
+    done
+
+echo "published bootstrap image: $IMG"
