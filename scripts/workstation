@@ -41,7 +41,7 @@ while (($#)); do
    --boot-disk-size=*) BOOT_DISK_SIZE="${1#*=}"; shift;;
    --web-terminal) WEB=true; shift;;
    --yes) YES=true; shift;;
-   create|configure|start|stop|list|shell|config-ssh|web-terminal|recover|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
+   create|configure|start|stop|list|shell|config-ssh|web-terminal|secrets|recover|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
    *) NAME="$1"; shift;;
  esac
@@ -162,6 +162,18 @@ case "$ACTION" in
   shell) [[ "$(status)" == RUNNING ]] || die 'Workstation not running'; gcloud compute ssh "developer@$INSTANCE" "${GC[@]}";;
   config-ssh) gcloud compute config-ssh --project "$PROJECT";;
   web-terminal) web_access;;
+  secrets)
+    # Push OpenCode user secrets from WORKSTATION_ENV_OPENCODE (dotenv lines)
+    # to the running workstation's opencode service environment.
+    [[ -n "${WORKSTATION_ENV_OPENCODE:-}" ]] || die 'Set WORKSTATION_ENV_OPENCODE with OpenCode dotenv secrets'
+    [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+    wait_ssh
+    {
+      printf 'export WORKSTATION_ENV_OPENCODE=%q\n' "$WORKSTATION_ENV_OPENCODE"
+      cat "$ROOT/infra/workstation/opencode-secrets"
+    } | gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s'
+    echo "secrets: applied to $INSTANCE"
+    ;;
   recover)
     [[ -n "$(status)" ]] || die 'Workstation does not exist'
     RECOVERY_INSTANCE="$INSTANCE-recovery"

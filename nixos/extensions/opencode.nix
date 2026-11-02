@@ -24,6 +24,16 @@ in
       '';
     };
 
+    secretsFile = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/workstation/opencode-secrets.env";
+      description = ''
+        Environment file holding the OpenCode user secrets (for example
+        `OPENROUTER_API_KEY` and `GH_TOKEN`), sourced into the server process.
+        Lives outside the Nix store and is rewritten by the `secrets` action.
+      '';
+    };
+
     user = lib.mkOption {
       type = lib.types.str;
       default = "developer";
@@ -55,6 +65,7 @@ in
     systemd.tmpfiles.rules = [
       "d /var/lib/workstation 0750 root root -"
       "f ${cfg.environmentFile} 0600 root root - OPENCODE_SERVER_USERNAME=opencode\nOPENCODE_SERVER_PASSWORD=0trl0sXVVSLxHTkFwYkM"
+      "f ${cfg.secretsFile} 0600 root root -"
     ];
 
     systemd.services.opencode = {
@@ -67,7 +78,7 @@ in
       serviceConfig = {
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
-        EnvironmentFile = cfg.environmentFile;
+        EnvironmentFile = [ cfg.environmentFile cfg.secretsFile ];
         ExecStart = "${lib.getExe cfg.package} serve --hostname ${cfg.host} --port ${toString cfg.port}";
         Restart = "on-failure";
         RestartSec = "3s";

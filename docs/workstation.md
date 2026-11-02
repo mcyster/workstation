@@ -180,6 +180,22 @@ opencode auth login  # configure model providers for OpenCode
 OpenCode and other developer tools share the user's Git and GitHub
 configuration through `~/.config/gh` and `~/.gitconfig`.
 
+### OpenCode provider secrets
+
+OpenCode's model providers need API keys. Keep them as a GitHub Actions secret
+called `WORKSTATION_ENV_OPENCODE` containing dotenv lines, for example:
+
+```
+OPENROUTER_API_KEY=sk-…
+GH_TOKEN=ghp_…
+```
+
+Then run the **`secrets`** action (or `WORKSTATION_ENV_OPENCODE=… scripts/workstation secrets main`).
+It writes `/var/lib/workstation/opencode-secrets.env` on the instance and
+restarts the opencode service, so the web server sees the keys. The values stay
+outside the Nix store. Re-run it on a freshly created workstation to restore
+your providers.
+
 Clone any repository with a Nix flake and work inside its development
 environment:
 
@@ -209,6 +225,8 @@ Use **Actions → Workstation → Run workflow** to run `configure`, `start`,
   with them already included.
 - `web-terminal` enables browser access or issues a new website password and a
   new recovery password.
+- `secrets` applies OpenCode provider secrets (from the
+  `WORKSTATION_ENV_OPENCODE` GitHub secret) to the opencode service.
 - `start` and `stop` preserve the disk.
 - `list` shows every managed instance with its browser URL and Secret Manager
   links.
@@ -325,6 +343,8 @@ known-good image to boot from.
   `switch-to-configuration`. Heavy builds happen once on the deploy machine and
   are reused wherever the workstation runs (any zone or new box).
 - `infra/workstation/web-access` — rotates website and recovery passwords.
+- `infra/workstation/opencode-secrets` — applies OpenCode env secrets on the
+  instance (outside the Nix store).
 - `.github/workflows/infra.yml` — applies or checks infrastructure on PRs and
   merges, so infrastructure changes go through code review.
 - `.github/workflows/publish-image.yml` — publishes the bootstrap image after
