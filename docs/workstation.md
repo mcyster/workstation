@@ -193,6 +193,19 @@ never by a hardcoded list:
 - **From a terminal**: every `~/.env.*` file in the invoking user's home is
   loaded, so `~/.env.tog` becomes `.env.tog`.
 
+Keep the raw secret files on your own machine and upload them to GitHub with:
+
+```sh
+scripts/push-environment-secrets                    # every ~/.env.* discovered
+scripts/push-environment-secrets opencode tog       # just those two
+scripts/push-environment-secrets --dir ~/secrets    # read ~/secrets/.env.<name>
+```
+
+The tool reads each `.env.NAME`, pushes its contents to the repository secret
+`WORKSTATION_ENV_<NAME>`, skips unchanged files via a local fingerprint, never
+prints values, and requires confirmation. It needs the GitHub CLI (`gh`),
+included in the development shell.
+
 The `secrets` action (or `scripts/workstation secrets main`) provisions every
 discovered secret to the running workstation, and `create` does the same
 automatically. For each secret two files are written, both outside the Nix
@@ -366,6 +379,8 @@ known-good image to boot from.
   browser terminal, idle shutdown).
 - `scripts/workstation` — instance lifecycle, SSH, password rotation, using the
   published bootstrap image.
+- `scripts/push-environment-secrets` — uploads local `~/.env.*` files to GitHub
+  as `WORKSTATION_ENV_<NAME>` repository secrets for the workflow to provision.
 - `infra/workstation/provision` — provisions the static Google Cloud
   infrastructure (APIs, identity, IAM, image bucket, firewall rule).
 - `infra/workstation/publish-image` — builds and uploads the complete

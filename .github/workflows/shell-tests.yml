@@ -19,4 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run shell tests
-        run: bash tests/secrets-test
+        run: |
+          bash tests/secrets-test
+          bash tests/push-secrets-test
