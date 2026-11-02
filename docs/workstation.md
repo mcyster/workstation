@@ -205,10 +205,14 @@ store and replaced atomically only after validation:
   `export ` prefixes are stripped, comments and blank lines preserved. Owner
   `root:root`, mode `0600`.
 
-Lines must be `KEY=VALUE` or `export KEY=VALUE` (with `KEY` matching
-`[A-Za-z_][A-Za-z0-9_]*`); comments and blank lines are kept. Anything else is
-rejected with an error naming the line — never echoing the value — and the
-existing files are left untouched.
+Lines must be `KEY=VALUE` or `export KEY=VALUE` with `KEY` matching
+`[A-Za-z_][A-Za-z0-9_]*`, and a value that is a plain token or a fully quoted
+string (`'…'` or `"…"`). Values containing `$`, backticks, backslashes,
+unquoted whitespace, or unterminated/embedded quotes are rejected: they would
+mean different things in the sourced developer copy and in systemd's env file.
+Comments and blank lines are kept. Anything rejected aborts with an error
+naming the line — never echoing the value — and the existing files are left
+untouched.
 
 Only the services that explicitly declare the secret are restarted after a
 write: `nixos/extensions/secrets.nix` maps each name to its units, and a secret

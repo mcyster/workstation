@@ -50,7 +50,10 @@ while (($#)); do
    -*) die "Unknown option $1";;
    # The secrets command takes a second positional: the secret name (e.g.
    # "opencode", "tog"). The first positional is still the workstation name.
-   *) ((POSITIONALS++)); if [[ "$ACTION" == secrets && "$POSITIONALS" -eq 2 ]]; then SECRET="$1"; else NAME="$1"; fi; shift;;
+   # NOTE: `POSITIONALS=$((POSITIONALS + 1))` not `((POSITIONALS++))`: the
+   # latter's exit status is the pre-increment value, which is 0 for the first
+   # positional and would abort under `set -e`.
+   *) POSITIONALS=$((POSITIONALS + 1)); if [[ "$ACTION" == secrets && "$POSITIONALS" -eq 2 ]]; then SECRET="$1"; else NAME="$1"; fi; shift;;
  esac
 done
 [[ -n "$ACTION" ]] || { usage; exit 2; }
