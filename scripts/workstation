@@ -81,10 +81,12 @@ wait_ssh() {
   wait_ssh_for "$INSTANCE"
 }
 ensure_bucket() {
-  # The image bucket is provisioned by the Infra workflow (provision), not by
-  # instance lifecycle. Fail loudly when the project is not bootstrapped yet.
-  if ! gsutil ls -b "gs://$BUCKET" >/dev/null 2>&1; then
-    die "Image bucket gs://$BUCKET is missing. Run the Infra workflow (infra/workstation/provision) once for this project first."
+  # The image bucket is provisioned by the Infra workflow
+  # (infra/workstation/provision), not by instance lifecycle. Fail loudly with
+  # the underlying error so missing or mis-scoped infrastructure is obvious.
+  local error
+  if ! error="$(gcloud storage buckets describe "gs://$BUCKET" --format='value(name)' 2>&1)"; then
+    die "Image bucket gs://$BUCKET is not accessible: $error. Provision it with the Infra workflow (infra/workstation/provision)."
   fi
 }
 image_name() {
