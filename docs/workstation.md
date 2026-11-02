@@ -298,9 +298,10 @@ a known-good image to boot from.
 - `scripts/workstation` — instance lifecycle, images, SSH, password rotation.
 - `infra/workstation/provision` — provisions the static Google Cloud
   infrastructure (APIs, identity, IAM, image bucket, firewall rule).
-- `infra/workstation/deploy` — pushes the flake to `/etc/nixos` on the instance
-  and runs `nixos-rebuild switch`; runtime credentials in `/var/lib/workstation`
-  are preserved.
+- `infra/workstation/deploy` — builds the workstation flake locally, copies
+  the closure to the instance, and activates it with a normal
+  `switch-to-configuration`. Heavy builds happen once on the deploy machine and
+  are reused wherever the workstation runs (any zone or new box).
 - `infra/workstation/web-access` — rotates website and recovery passwords.
 - `.github/workflows/infra.yml` — applies or checks infrastructure on PRs and
   merges, so infrastructure changes go through code review.

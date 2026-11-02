@@ -53,8 +53,9 @@ jobs:
           service_account: ${{ env.SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
       - name: Install Nix
-        # Only create and recover build the base NixOS disk image.
-        if: ${{ inputs.action == 'create' || inputs.action == 'recover' }}
+        # create builds the base image; configure and recover deploy the
+        # flake closure, which is built on the runner and copied to the VM.
+        if: ${{ inputs.action == 'create' || inputs.action == 'configure' || inputs.action == 'recover' }}
         uses: determinatesystems/nix-installer-action@v23
       - name: Manage workstation
         shell: bash
