@@ -24,11 +24,6 @@ in
       '';
     };
 
-    # The provider env file path is intentionally NOT an option: the only
-    # writer is the `secrets` action (infra/workstation/opencode-secrets),
-    # which fixes the path below and over SSH cannot discover Nix config. An
-    # option here would only let the two drift apart.
-
     user = lib.mkOption {
       type = lib.types.str;
       default = "developer";
@@ -58,11 +53,13 @@ in
     # OpenCode always authenticates the user as `opencode` (the
     # OPENCODE_SERVER_USERNAME value is ignored by `serve`).
     systemd.tmpfiles.rules = [
-      "d /var/lib/workstation 0750 root root -"
       "f ${cfg.environmentFile} 0600 root root - OPENCODE_SERVER_USERNAME=opencode\nOPENCODE_SERVER_PASSWORD=0trl0sXVVSLxHTkFwYkM"
-      # Written by the `secrets` action (infra/workstation/opencode-secrets).
-      "f /var/lib/workstation/opencode-secrets.env 0600 root root -"
     ];
+
+    # The opencode secret (OPENROUTER_API_KEY, GH_TOKEN, ...) is a generic
+    # workstation secret named "opencode"; see nixos/extensions/secrets.nix
+    # for the env file that systemd sources here.
+    services.workstation.secrets.opencode.units = [ "opencode" ];
 
     systemd.services.opencode = {
       description = "OpenCode web service";
@@ -75,9 +72,9 @@ in
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
         # The browser-auth file must come LAST: systemd lets later files win,
-        # so `OPENCODE_SERVER_PASSWORD` from the providers file would otherwise
-        # override the managed password.
-        EnvironmentFile = [ "/var/lib/workstation/opencode-secrets.env" cfg.environmentFile ];
+        # so `OPENCODE_SERVER_PASSWORD` from the opencode secret would
+        # otherwise override the managed password.
+        EnvironmentFile = [ "/var/lib/workstation/secrets/.env.opencode" cfg.environmentFile ];
         ExecStart = "${lib.getExe cfg.package} serve --hostname ${cfg.host} --port ${toString cfg.port}";
         Restart = "on-failure";
         RestartSec = "3s";

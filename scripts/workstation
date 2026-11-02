@@ -14,14 +14,18 @@ BOOT_DISK_SIZE=100
 WEB=false
 YES=false
 ACTION=""
+SECRET=""
+POSITIONALS=0
 TAG=workstation-web
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation create [NAME] [--machine-type TYPE] [--boot-disk-size GB] [--web-terminal]
        workstation configure [NAME]
+       workstation secrets [NAME] SECRET
        workstation recover [NAME]
-Commands: create, configure, start, stop, list, shell, config-ssh, web-terminal, recover, destroy
+Commands: create, configure, start, stop, list, shell, config-ssh, web-terminal, secrets, recover, destroy
 web-terminal sets up browser access and issues a new website and recovery password.
+secrets writes SECRET (e.g. opencode, coder, tog) from WORKSTATION_ENV_<SECRET> to the instance.
 configure deploys the current flake to a running instance (built on this machine).
 create boots the latest published bootstrap image (no build; publish it first with infra/workstation/publish-image).
 recover boots a fresh instance from the bootstrap image with your original disk attached for rescue.
@@ -43,7 +47,9 @@ while (($#)); do
    --yes) YES=true; shift;;
    create|configure|start|stop|list|shell|config-ssh|web-terminal|secrets|recover|destroy) [[ -z "$ACTION" ]] || die 'Duplicate command'; ACTION="$1"; shift;;
    -*) die "Unknown option $1";;
-   *) NAME="$1"; shift;;
+   # The secrets command takes a second positional: the secret name (e.g.
+   # "opencode", "tog"). The first positional is still the workstation name.
+   *) ((POSITIONALS++)); if [[ "$ACTION" == secrets && "$POSITIONALS" -eq 2 ]]; then SECRET="$1"; else NAME="$1"; fi; shift;;
  esac
 done
 [[ -n "$ACTION" ]] || { usage; exit 2; }
@@ -163,16 +169,21 @@ case "$ACTION" in
   config-ssh) gcloud compute config-ssh --project "$PROJECT";;
   web-terminal) web_access;;
   secrets)
-    # Push OpenCode user secrets from WORKSTATION_ENV_OPENCODE (dotenv lines)
-    # to the running workstation's opencode service environment.
-    [[ -n "${WORKSTATION_ENV_OPENCODE:-}" ]] || die 'Set WORKSTATION_ENV_OPENCODE with OpenCode dotenv secrets'
+    # Push user secrets (dotenv lines) for a named consumer (opencode, coder,
+    # tog, ...) to the running workstation. The instance writes
+    # /var/lib/workstation/secrets/.env.NAME and /home/developer/.env.NAME and
+    # restarts the units Nix declared for NAME, if any.
+    [[ -n "$SECRET" ]] || die 'Specify a secret name, e.g. workstation secrets main opencode'
+    [[ "$SECRET" =~ ^[a-z][a-z0-9-]*$ ]] || die "Invalid secret name: $SECRET"
+    envvar="WORKSTATION_ENV_$(printf '%s' "$SECRET" | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${!envvar:-}" ]] || die "Set $envvar with dotenv secrets for $SECRET"
     [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
     wait_ssh
     {
-      printf 'export WORKSTATION_ENV_OPENCODE=%q\n' "$WORKSTATION_ENV_OPENCODE"
-      cat "$ROOT/infra/workstation/opencode-secrets"
-    } | gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s'
-    echo "secrets: applied to $INSTANCE"
+      printf 'export WORKSTATION_ENV=%q\n' "${!envvar}"
+      cat "$ROOT/infra/workstation/secrets"
+    } | gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command "sudo bash -s -- $SECRET"
+    echo "secrets: applied $SECRET to $INSTANCE"
     ;;
   recover)
     [[ -n "$(status)" ]] || die 'Workstation does not exist'

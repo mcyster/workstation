@@ -19,4 +19,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run shell tests
-        run: bash tests/opencode-secrets-test
+        run: bash tests/secrets-test
