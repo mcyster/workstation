@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Deploy the workstation flake to a running NixOS instance.
+# Deploy the workstation to a running NixOS instance.
 #
-# Copies the flake sources (flake.nix, flake.lock, nixos/) to /etc/nixos and
-# runs a normal `nixos-rebuild switch`. The flake sources are rebuilt on the
-# instance from the committed flake.lock, so nothing secret lives in the store.
-#
-# /etc/nixos holds the deployed configuration; runtime credentials live
-# separately under /var/lib/workstation and are never touched here.
+# Builds the workstation flake configuration on the local machine (or the CI
+# runner) and copies the resulting store closure to the instance, then
+# activates it. Everything is built once and reused wherever the workstation
+# runs — any zone, any box — so the slow parts (for example the code-server
+# Node build) are never repeated on the instance itself.
 set -euo pipefail
 
 PROGRAM="${0##*/}"
@@ -19,7 +18,12 @@ usage() {
   cat <<EOF
 Usage: $PROGRAM --instance NAME --project PROJECT --zone ZONE [--repo DIR]
 
-Deploy the current repository's flake to a running NixOS workstation.
+Build and activate the workstation flake on a running NixOS instance.
+
+The build happens on this machine (a Linux machine with Nix and flakes); the
+closure is copied to the instance and activated with a normal
+switch-to-configuration. Requires SSH access to the instance's developer user,
+which must have passwordless sudo (the base NixOS workstation config).
 EOF
 }
 
@@ -46,30 +50,39 @@ done
 [[ -n "$INSTANCE" && -n "$PROJECT" && -n "$ZONE" ]] || usage_error "--instance, --project, and --zone are required"
 [[ -n "$REPO" ]] || REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+die() { echo "$PROGRAM: $*" >&2; exit 1; }
+command -v gcloud >/dev/null || die 'Install Google Cloud CLI'
+command -v nix >/dev/null || die 'nix is required to build the workstation (Linux with flakes)'
+
 GC=(--project "$PROJECT" --zone "$ZONE")
-bundle="$(mktemp -d)"
-trap 'rm -rf "$bundle"' EXIT
 
-# Only the flake sources are needed to rebuild the workstation.
-(cd "$REPO" && tar czf "$bundle/workstation.tar.gz" flake.nix flake.lock nixos)
+# Build the complete workstation configuration on this machine.
+echo 'Building the workstation configuration...' >&2
+out="$(cd "$REPO" && nix build '.#nixosConfigurations.workstation.config.system.build.toplevel' --no-link --print-out-paths)"
+echo "built: $out" >&2
 
-gcloud compute scp "$bundle/workstation.tar.gz" "developer@$INSTANCE:/tmp/workstation.tar.gz" "${GC[@]}" --quiet
+# Ensure the developer SSH key is known to the instance (injected by the guest
+# agent), then resolve its external address for the closure copy.
+gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command true
+IP="$(gcloud compute instances describe "$INSTANCE" "${GC[@]}" \
+  --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
+[[ -n "$IP" ]] || { echo "$PROGRAM: could not resolve $INSTANCE external IP" >&2; exit 1; }
 
-gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' <<'REMOTE'
+# Copy the built closure to the instance using the same SSH key gcloud manages.
+export NIX_SSHOPTS="-i $HOME/.ssh/google_compute_engine -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+echo "copying the configuration closure to $IP..." >&2
+nix copy --to "ssh://developer@$IP" "$out"
+
+# Activate as root: point the system profile at the new generation and run the
+# normal switch (including the bootloader) so the generation persists across
+# reboots and appears in the serial-console rollback menu.
+echo 'Activating the workstation configuration...' >&2
+gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s' <<REMOTE
 set -euo pipefail
-# sudo resets the environment; put the system tools back on PATH.
-export PATH="/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:$PATH"
-
-# Only the deployed configuration is replaced. Runtime credentials such as
-# /var/lib/workstation/caddy.env and /var/lib/workstation/recovery-password
-# live in a separate directory and are preserved across deploys.
-rm -rf /etc/nixos
-mkdir -p /etc/nixos
-tar xzf /tmp/workstation.tar.gz -C /etc/nixos
-rm -f /tmp/workstation.tar.gz
-
-echo 'Switching the workstation to the flake configuration...'
-nixos-rebuild switch --flake /etc/nixos#workstation
+export PATH="/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:\$PATH"
+nix-env -p /nix/var/nix/profiles/system --set '$out'
+env NIXOS_INSTALL_BOOTLOADER=1 '$out/bin/switch-to-configuration' switch
 REMOTE
 
 echo "deployed: $INSTANCE"
+echo "generation: $out"
