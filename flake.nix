@@ -10,12 +10,6 @@
     let
       system = "x86_64-linux";
 
-      # Modules shared by the minimal GCE image and the running workstation.
-      baseModules = [
-        ./nixos/base.nix
-        ./nixos/gce.nix
-      ];
-
       # The complete workstation configuration (base + extensions).
       workstationModule = ./nixos/configuration.nix;
 
@@ -27,14 +21,15 @@
     in
     {
       packages.${system} = {
-        # Minimal GCE-compatible NixOS image. It deliberately contains only the
-        # base workstation so it stays small, generic, and cheap to rebuild.
-        # Extensions and the full workstation are applied later on the running
-        # machine with ordinary `nixos-rebuild switch` deploys.
+        # The GCE image IS the complete workstation (a bootstrap server):
+        # base system plus every extension. `create` boots it directly, so
+        # publishing the image is a separate, occasional step (see
+        # infra/workstation/publish-image) instead of something every create
+        # does.
         gceImage =
           (nixpkgs.lib.nixosSystem {
             inherit system;
-            modules = baseModules;
+            modules = [ workstationModule ];
           }).config.system.build.googleComputeImage;
       };
 
@@ -45,12 +40,10 @@
         modules = [ workstationModule ];
       };
 
-      # Real build checks so `nix flake check` validates more than evaluation:
-      # the full workstation closure and the GCE disk image.
-      checks.${system} = {
-        toplevel = self.nixosConfigurations.workstation.config.system.build.toplevel;
-        gceImage = self.packages.${system}.gceImage;
-      };
+      # Real build checks so `nix flake check` validates more than evaluation.
+      # The toplevel is the complete workstation; the GCE image is validated
+      # by the publish-image workflow rather than rebuilt on every CI run.
+      checks.${system}.toplevel = self.nixosConfigurations.workstation.config.system.build.toplevel;
 
       devShells = nixpkgs.lib.genAttrs systems (
         system:

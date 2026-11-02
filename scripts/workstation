@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Workstation command-line interface for Google Compute Engine.
 #
-# Creates and manages NixOS workstations. Creating a workstation builds the
-# minimal NixOS GCE base image from this repository's flake, uploads it to
-# Google Cloud, boots the instance from it, and then applies the full flake
-# configuration with a normal `nixos-rebuild switch`.
+# Creates and manages NixOS workstations. The GCE image is the complete
+# workstation ("bootstrap server"), published occasionally by
+# infra/workstation/publish-image; create boots the latest published image.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAME=main
@@ -15,7 +14,6 @@ BOOT_DISK_SIZE=100
 WEB=false
 YES=false
 ACTION=""
-SYSTEM="x86_64-linux"
 TAG=workstation-web
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
@@ -24,9 +22,9 @@ Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation recover [NAME]
 Commands: create, configure, start, stop, list, shell, config-ssh, web-terminal, recover, destroy
 web-terminal sets up browser access and issues a new website and recovery password.
-configure re-applies the workstation flake (nixos-rebuild switch) to a running instance.
-create builds the base image (requires a Linux machine with Nix) and deploys the flake.
-recover boots a fresh instance from the base image with your original disk attached for rescue.
+configure deploys the current flake to a running instance (built on this machine).
+create boots the latest published bootstrap image (no build; publish it first with infra/workstation/publish-image).
+recover boots a fresh instance from the bootstrap image with your original disk attached for rescue.
 Default name: main. Default machine type: e2-standard-2. Default boot disk: 100 GB.
 Create refuses to overwrite an existing workstation; destroy it first.
 Stop retains disk; destroy permanently deletes disk.
@@ -57,7 +55,6 @@ PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 ZONE="${ZONE:-$(gcloud config get-value compute/zone 2>/dev/null)}"
 [[ "$PROJECT" != '(unset)' && -n "$PROJECT" ]] || die 'Specify --project'
 INSTANCE="workstation-$NAME"
-BUCKET="workstation-images-$PROJECT"
 SECRET_WEB="$INSTANCE-web-password"
 SECRET_RECOVERY="$INSTANCE-recovery-password"
 GC=(--project "$PROJECT")
@@ -80,43 +77,14 @@ wait_ssh_for() {
 wait_ssh() {
   wait_ssh_for "$INSTANCE"
 }
-ensure_bucket() {
-  # The image bucket is provisioned by the Infra workflow
-  # (infra/workstation/provision), not by instance lifecycle. Fail loudly with
-  # the underlying error so missing or mis-scoped infrastructure is obvious.
-  local error
-  if ! error="$(gcloud storage buckets describe "gs://$BUCKET" --format='value(name)' 2>&1)"; then
-    die "Image bucket gs://$BUCKET is not accessible: $error. Provision it with the Infra workflow (infra/workstation/provision)."
-  fi
-}
-image_name() {
-  local hash
-  hash="$(basename "$1" | cut -d- -f1)"
-  printf 'nixos-base-%s' "${hash:0:10}"
-}
-ensure_gce_image() {
-  # Prints only the GCE image name on stdout; all progress goes to stderr so
-  # it can be captured with $(). Requires a Linux machine with Nix.
-  local out img file
-  if [[ "$(uname -s)" != Linux ]]; then
-    die 'Creating a NixOS instance builds the base image. Run from a Linux machine with Nix, or use the GitHub Actions workflow.'
-  fi
-  command -v nix >/dev/null || die 'Install Nix (with flakes) to build the base image'
-  echo 'Building the base NixOS image...' >&2
-  out="$(cd "$ROOT" && nix build ".#packages.$SYSTEM.gceImage" --no-link --print-out-paths)"
-  img="$(image_name "$out")"
-  if ! gcloud compute images describe "$img" --project "$PROJECT" >/dev/null 2>&1; then
-    file="$(find "$out" -maxdepth 1 -type f -name '*.raw.tar.gz' -o -maxdepth 1 -type f -name '*.tar.gz' | head -1)"
-    [[ -n "$file" ]] || die "Base image artifact not found in $out"
-    echo "Uploading base image $img..." >&2
-    if ! gsutil -q stat "gs://$BUCKET/${img}.tar.gz"; then
-      gsutil -q cp "$file" "gs://$BUCKET/${img}.tar.gz"
-    fi
-    gcloud compute images create "$img" --project "$PROJECT" \
-      --source-uri "gs://$BUCKET/${img}.tar.gz" \
-      --storage-location "${ZONE%-*}" \
-      --labels "managed-workstation=true" >/dev/null
-  fi
+latest_bootstrap_image() {
+  # The published, complete workstation image (bootstrap server). Prints its
+  # name on stdout; no builds happen here.
+  local img
+  img="$(gcloud compute images list --project "$PROJECT" \
+    --filter='labels.workstation-bootstrap=true' \
+    --format='value(name)' --sort-by=~creationTimestamp | head -1)"
+  [[ -n "$img" ]] || die 'No bootstrap image is published in this project. Publish one first with the Publish image workflow (infra/workstation/publish-image).'
   echo "$img"
 }
 deploy() {
@@ -168,11 +136,11 @@ case "$ACTION" in
       # deliberate, separate step so a misapplied command cannot delete data.
       die "$INSTANCE already exists. Destroy it first with: scripts/workstation destroy $NAME"
     fi
-    ensure_bucket
-    IMG="$(ensure_gce_image)"
+    IMG="$(latest_bootstrap_image)"
     gcloud compute machine-types describe "$MACHINE_TYPE" "${GC[@]}" >/dev/null
     # GCE serial console is enabled so a failed boot can be recovered from
-    # the serial console. SSH keys are delivered by the guest agent.
+    # the serial console. SSH keys are delivered by the guest agent. The image
+    # already contains the complete workstation, so no deploy is needed.
     gcloud compute instances create "$INSTANCE" "${GC[@]}" \
       --machine-type "$MACHINE_TYPE" \
       --image "$IMG" \
@@ -180,7 +148,6 @@ case "$ACTION" in
       --boot-disk-type pd-balanced \
       --labels managed-workstation=true \
       --metadata serial-port-enable=true
-    deploy
     if [[ "$WEB" == true ]]; then web_access; fi
     ;;
   configure) deploy;;
@@ -201,8 +168,7 @@ case "$ACTION" in
     if [[ -n "$(gcloud compute instances describe "$RECOVERY_INSTANCE" "${GC[@]}" --format='value(name)' 2>/dev/null)" ]]; then
       die "Recovery instance already exists: $RECOVERY_INSTANCE"
     fi
-    ensure_bucket
-    IMG="$(ensure_gce_image)"
+    IMG="$(latest_bootstrap_image)"
     if [[ "$YES" != true ]]; then read -r -p "Recovering stops $INSTANCE and creates a rescue instance. Type $NAME to continue: " CONFIRM; [[ "$CONFIRM" == "$NAME" ]] || die 'Cancelled'; fi
     [[ "$(status)" == TERMINATED ]] || gcloud compute instances stop "$INSTANCE" "${GC[@]}"
     echo "Starting rescue instance $RECOVERY_INSTANCE..."
@@ -218,7 +184,6 @@ case "$ACTION" in
       --disk "$INSTANCE" --device-name old-disk >/dev/null
     INSTANCE="$RECOVERY_INSTANCE"
     NAME="$NAME-recovery"
-    deploy
     cat <<'EOF'
 Recovery instance is ready. Your original disk is attached as /dev/disk/by-id/google-old-disk.
 Recover files from it with:
