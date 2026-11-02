@@ -73,8 +73,10 @@ in
         WorkingDirectory = "/home/${cfg.user}";
         # The browser-auth file must come LAST: systemd lets later files win,
         # so `OPENCODE_SERVER_PASSWORD` from the opencode secret would
-        # otherwise override the managed password.
-        EnvironmentFile = [ "/var/lib/workstation/secrets/.env.opencode" cfg.environmentFile ];
+        # otherwise override the managed password. The secret file is loaded
+        # only when it exists (the `-` prefix skips a missing file), so no
+        # empty placeholder is generated.
+        EnvironmentFile = [ "-/var/lib/workstation/secrets/.env.opencode" cfg.environmentFile ];
         ExecStart = "${lib.getExe cfg.package} serve --hostname ${cfg.host} --port ${toString cfg.port}";
         Restart = "on-failure";
         RestartSec = "3s";

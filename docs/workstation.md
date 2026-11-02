@@ -221,6 +221,11 @@ with an empty mapping (for example a CLI-only tool like `tog`) is written
 without restarting anything. Re-run a secret on a freshly created workstation
 to restore it.
 
+No empty placeholder env files are generated: services load `.env.NAME` only
+when it exists (their `EnvironmentFile` entries use a `-` prefix, which systemd
+skips for missing files), so a workstation with no secrets configured has no
+secret files at all.
+
 Clone any repository with a Nix flake and work inside its development
 environment:
 

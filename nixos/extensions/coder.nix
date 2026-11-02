@@ -52,7 +52,7 @@ in
       serviceConfig = {
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
-        EnvironmentFile = [ "/var/lib/workstation/secrets/.env.coder" ];
+        EnvironmentFile = [ "-/var/lib/workstation/secrets/.env.coder" ];
         ExecStart = "${lib.getExe cfg.package} --bind-addr ${cfg.host}:${toString cfg.port} --auth none --disable-telemetry ${cfg.workspace}";
         Restart = "on-failure";
         RestartSec = "3s";
