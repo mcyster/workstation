@@ -17,15 +17,16 @@ ACTION=""
 SECRET=""
 POSITIONALS=0
 TAG=workstation-web
+SECRETS_DIR="${WORKSTATION_SECRETS_DIR:-$HOME}"
 usage() { cat <<'HELP'
 Usage: workstation COMMAND [NAME] [--project PROJECT] [--zone ZONE]
        workstation create [NAME] [--machine-type TYPE] [--boot-disk-size GB] [--web-terminal]
        workstation configure [NAME]
-       workstation secrets [NAME] SECRET
+       workstation secrets [NAME] [SECRET]
        workstation recover [NAME]
 Commands: create, configure, start, stop, list, shell, config-ssh, web-terminal, secrets, recover, destroy
 web-terminal sets up browser access and issues a new website and recovery password.
-secrets writes SECRET (e.g. opencode, coder, tog) from WORKSTATION_ENV_<SECRET> to the instance.
+secrets provisions every WORKSTATION_ENV_* secret (or one named SECRET) to the instance.
 configure deploys the current flake to a running instance (built on this machine).
 create boots the latest published bootstrap image (no build; publish it first with infra/workstation/publish-image).
 recover boots a fresh instance from the bootstrap image with your original disk attached for rescue.
@@ -98,6 +99,55 @@ deploy() {
   wait_ssh
   "$ROOT/infra/workstation/deploy" --instance "$INSTANCE" --project "$PROJECT" --zone "$ZONE" --repo "$ROOT"
 }
+validate_secret_name() {
+  [[ "$1" =~ ^[a-z][a-z0-9_-]*$ ]] || die "Invalid secret name: $1"
+}
+# Discover secrets and provision them to the running workstation. Sources, in
+# order: WORKSTATION_SECRET_PAYLOAD (set by the GitHub workflow from
+# toJSON(secrets)), then $SECRETS_DIR/.env.* files next to the invoking user.
+# An optional single SECRET name filters to one entry. Each secret becomes a
+# "NAME<TAB>BASE64" record on stdin for infra/workstation/secrets; contents
+# are never echoed to the terminal.
+provision_secrets() {
+  local payload data name
+  if [[ -n "${WORKSTATION_SECRET_PAYLOAD:-}" ]]; then
+    payload="$WORKSTATION_SECRET_PAYLOAD"
+    if [[ -n "$SECRET" ]]; then
+      name="$(printf '%s\n' "$payload" | awk -F'\t' -v n="$SECRET" '$1==n {print $2}')"
+      [[ -n "$name" ]] || die "No secret named $SECRET in WORKSTATION_SECRET_PAYLOAD"
+      payload="$SECRET"$'\t'"$name"$'\n'
+    fi
+  else
+    payload=""
+    for f in "$SECRETS_DIR"/.env.*; do
+      [[ -f "$f" ]] || continue
+      name="${f##*.env.}"
+      validate_secret_name "$name"
+      if [[ -n "$SECRET" && "$name" != "$SECRET" ]]; then continue; fi
+      data="$(base64 < "$f" | tr -d '\n')"
+      payload+="${name}"$'\t'"${data}"$'\n'
+    done
+    if [[ -n "$SECRET" && -z "$payload" ]]; then
+      die "No $SECRETS_DIR/.env.$SECRET file"
+    fi
+  fi
+  if [[ -z "$payload" ]]; then
+    echo 'secrets: nothing to apply (set WORKSTATION_SECRET_PAYLOAD or ~/.env.* files)' >&2
+    return 0
+  fi
+  # create calls this right after boot; wait for the machine to come up.
+  for _ in {1..40}; do
+    [[ "$(status)" == RUNNING ]] && break
+    sleep 5
+  done
+  [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
+  wait_ssh
+  {
+    printf 'export WORKSTATION_SECRET_PAYLOAD=%q\n' "$payload"
+    cat "$ROOT/infra/workstation/secrets"
+  } | gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command 'sudo bash -s'
+  echo "secrets: applied to $INSTANCE"
+}
 add_secret() {
   local name="$1" value="$2" label="$3"
   if ! gcloud secrets describe "$name" --project "$PROJECT" >/dev/null 2>&1; then
@@ -155,6 +205,9 @@ case "$ACTION" in
       --labels managed-workstation=true \
       --metadata serial-port-enable=true
     if [[ "$WEB" == true ]]; then web_access; fi
+    # Automatically load all discovered secrets on a fresh workstation.
+    # provision_secrets early-returns when nothing is available.
+    provision_secrets
     ;;
   configure) deploy;;
   start)
@@ -169,21 +222,7 @@ case "$ACTION" in
   config-ssh) gcloud compute config-ssh --project "$PROJECT";;
   web-terminal) web_access;;
   secrets)
-    # Push user secrets (dotenv lines) for a named consumer (opencode, coder,
-    # tog, ...) to the running workstation. The instance writes
-    # /var/lib/workstation/secrets/.env.NAME and /home/developer/.env.NAME and
-    # restarts the units Nix declared for NAME, if any.
-    [[ -n "$SECRET" ]] || die 'Specify a secret name, e.g. workstation secrets main opencode'
-    [[ "$SECRET" =~ ^[a-z][a-z0-9-]*$ ]] || die "Invalid secret name: $SECRET"
-    envvar="WORKSTATION_ENV_$(printf '%s' "$SECRET" | tr '[:lower:]' '[:upper:]')"
-    [[ -n "${!envvar:-}" ]] || die "Set $envvar with dotenv secrets for $SECRET"
-    [[ "$(status)" == RUNNING ]] || die 'Workstation must be running'
-    wait_ssh
-    {
-      printf 'export WORKSTATION_ENV=%q\n' "${!envvar}"
-      cat "$ROOT/infra/workstation/secrets"
-    } | gcloud compute ssh "developer@$INSTANCE" "${GC[@]}" --quiet --command "sudo bash -s -- $SECRET"
-    echo "secrets: applied $SECRET to $INSTANCE"
+    provision_secrets
     ;;
   recover)
     [[ -n "$(status)" ]] || die 'Workstation does not exist'

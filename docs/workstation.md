@@ -182,33 +182,39 @@ configuration through `~/.config/gh` and `~/.gitconfig`.
 
 ### Workstation secrets
 
-Apps and tools on the workstation can consume environment secrets — provider
-API keys, tokens, anything in dotenv form. Keep each secret as a GitHub Actions
-secret named `WORKSTATION_ENV_<NAME>` containing `KEY=VALUE` lines, for
-example:
+Any app or tool on the workstation can consume environment secrets — provider
+API keys, tokens, anything in dotenv form. Secrets are discovered by **name**,
+never by a hardcoded list:
 
-```
-OPENROUTER_API_KEY=sk-…
-GH_TOKEN=ghp_…
-```
+- **From GitHub Actions**: every repository secret whose name starts with
+  `WORKSTATION_ENV_` is loaded. The suffix — lowercased — becomes the secret
+  name: `WORKSTATION_ENV_TOG` becomes `.env.tog`. Unrelated secrets never leave
+  the workflow.
+- **From a terminal**: every `~/.env.*` file in the invoking user's home is
+  loaded, so `~/.env.tog` becomes `.env.tog`.
 
-An `export ` prefix is also accepted and stripped: both `KEY=VALUE` and
-`export KEY=VALUE` work. The secrets action keeps only valid `KEY=VALUE`
-entries; comments and blank lines are ignored.
+The `secrets` action (or `scripts/workstation secrets main`) provisions every
+discovered secret to the running workstation, and `create` does the same
+automatically. For each secret two files are written, both outside the Nix
+store and replaced atomically only after validation:
 
-Then run the **`secrets`** action with the secret name (or
-`WORKSTATION_ENV_OPENCODE=… scripts/workstation secrets main opencode`). For
-each name it writes two files on the instance, both outside the Nix store:
+- `/home/developer/.env.NAME` — the original shell content exactly as
+  discovered (export prefixes, comments, and blank lines preserved). Owner
+  `developer:users`, mode `0600`.
+- `/var/lib/workstation/secrets/.env.NAME` — systemd-compatible: optional
+  `export ` prefixes are stripped, comments and blank lines preserved. Owner
+  `root:root`, mode `0600`.
 
-- `/var/lib/workstation/secrets/.env.NAME` — read by the systemd units that
-  declare that secret (see `nixos/extensions/secrets.nix`).
-- `/home/developer/.env.NAME` — available to interactive shells and CLI tools
-  running as `developer`.
+Lines must be `KEY=VALUE` or `export KEY=VALUE` (with `KEY` matching
+`[A-Za-z_][A-Za-z0-9_]*`); comments and blank lines are kept. Anything else is
+rejected with an error naming the line — never echoing the value — and the
+existing files are left untouched.
 
 Only the services that explicitly declare the secret are restarted after a
-write: `secrets.nix` maps each name to its units, and a secret with an empty
-mapping (for example a CLI-only tool) is written without restarting anything.
-Re-run a secret on a freshly created workstation to restore it.
+write: `nixos/extensions/secrets.nix` maps each name to its units, and a secret
+with an empty mapping (for example a CLI-only tool like `tog`) is written
+without restarting anything. Re-run a secret on a freshly created workstation
+to restore it.
 
 Clone any repository with a Nix flake and work inside its development
 environment:
@@ -239,9 +245,8 @@ Use **Actions → Workstation → Run workflow** to run `configure`, `start`,
   with them already included.
 - `web-terminal` enables browser access or issues a new website password and a
   new recovery password.
-- `secrets` applies a workstation secret to the instance: pick the secret name
-  (for example `opencode`, `coder`, or `tog`) and the matching
-  `WORKSTATION_ENV_<NAME>` GitHub secret is written to the instance.
+- `secrets` provisions every `WORKSTATION_ENV_*` GitHub secret to the instance;
+  `create` does the same automatically.
 - `start` and `stop` preserve the disk.
 - `list` shows every managed instance with its browser URL and Secret Manager
   links.
@@ -271,9 +276,7 @@ scripts/workstation config-ssh main
 scripts/workstation stop main
 scripts/workstation start main
 scripts/workstation web-terminal main
-scripts/workstation secrets main opencode   # WORKSTATION_ENV_OPENCODE=… scripts/workstation secrets main opencode
-scripts/workstation secrets main coder      # WORKSTATION_ENV_CODER=…      scripts/workstation secrets main coder
-scripts/workstation secrets main tog        # WORKSTATION_ENV_TOG=…        scripts/workstation secrets main tog
+scripts/workstation secrets main        # provisions ~/.env.* from your home
 scripts/workstation recover main
 scripts/workstation destroy main
 ```
