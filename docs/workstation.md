@@ -180,6 +180,36 @@ opencode auth login  # configure model providers for OpenCode
 OpenCode and other developer tools share the user's Git and GitHub
 configuration through `~/.config/gh` and `~/.gitconfig`.
 
+### Workstation secrets
+
+Apps and tools on the workstation can consume environment secrets — provider
+API keys, tokens, anything in dotenv form. Keep each secret as a GitHub Actions
+secret named `WORKSTATION_ENV_<NAME>` containing `KEY=VALUE` lines, for
+example:
+
+```
+OPENROUTER_API_KEY=sk-…
+GH_TOKEN=ghp_…
+```
+
+An `export ` prefix is also accepted and stripped: both `KEY=VALUE` and
+`export KEY=VALUE` work. The secrets action keeps only valid `KEY=VALUE`
+entries; comments and blank lines are ignored.
+
+Then run the **`secrets`** action with the secret name (or
+`WORKSTATION_ENV_OPENCODE=… scripts/workstation secrets main opencode`). For
+each name it writes two files on the instance, both outside the Nix store:
+
+- `/var/lib/workstation/secrets/.env.NAME` — read by the systemd units that
+  declare that secret (see `nixos/extensions/secrets.nix`).
+- `/home/developer/.env.NAME` — available to interactive shells and CLI tools
+  running as `developer`.
+
+Only the services that explicitly declare the secret are restarted after a
+write: `secrets.nix` maps each name to its units, and a secret with an empty
+mapping (for example a CLI-only tool) is written without restarting anything.
+Re-run a secret on a freshly created workstation to restore it.
+
 Clone any repository with a Nix flake and work inside its development
 environment:
 
@@ -209,6 +239,9 @@ Use **Actions → Workstation → Run workflow** to run `configure`, `start`,
   with them already included.
 - `web-terminal` enables browser access or issues a new website password and a
   new recovery password.
+- `secrets` applies a workstation secret to the instance: pick the secret name
+  (for example `opencode`, `coder`, or `tog`) and the matching
+  `WORKSTATION_ENV_<NAME>` GitHub secret is written to the instance.
 - `start` and `stop` preserve the disk.
 - `list` shows every managed instance with its browser URL and Secret Manager
   links.
@@ -238,6 +271,9 @@ scripts/workstation config-ssh main
 scripts/workstation stop main
 scripts/workstation start main
 scripts/workstation web-terminal main
+scripts/workstation secrets main opencode   # WORKSTATION_ENV_OPENCODE=… scripts/workstation secrets main opencode
+scripts/workstation secrets main coder      # WORKSTATION_ENV_CODER=…      scripts/workstation secrets main coder
+scripts/workstation secrets main tog        # WORKSTATION_ENV_TOG=…        scripts/workstation secrets main tog
 scripts/workstation recover main
 scripts/workstation destroy main
 ```
@@ -325,6 +361,8 @@ known-good image to boot from.
   `switch-to-configuration`. Heavy builds happen once on the deploy machine and
   are reused wherever the workstation runs (any zone or new box).
 - `infra/workstation/web-access` — rotates website and recovery passwords.
+- `infra/workstation/secrets` — applies a named workstation secret on the
+  instance (outside the Nix store).
 - `.github/workflows/infra.yml` — applies or checks infrastructure on PRs and
   merges, so infrastructure changes go through code review.
 - `.github/workflows/publish-image.yml` — publishes the bootstrap image after

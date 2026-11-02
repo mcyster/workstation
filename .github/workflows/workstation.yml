@@ -3,14 +3,18 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Action (web-terminal sets up browser access and issues a new password)
+        description: Action (web-terminal sets up browser access and issues a new password; secrets applies a workstation secret from WORKSTATION_ENV_<name>)
         type: choice
         required: true
-        options: [create, configure, start, stop, web-terminal, list, recover, destroy]
+        options: [create, configure, start, stop, web-terminal, secrets, list, recover, destroy]
       name:
         description: Workstation name
         type: string
         default: main
+      secret:
+        description: Secret name to apply (used by the secrets action; e.g. opencode, coder, tog)
+        type: string
+        default: opencode
       machine_type:
         description: GCE machine type for create
         type: string
@@ -36,9 +40,14 @@ jobs:
       SERVICE_ACCOUNT: ${{ secrets.WORKSTATION_GCLOUD_SERVICE_ACCOUNT }}
       ACTION: ${{ inputs.action }}
       NAME: ${{ inputs.name }}
+      SECRET: ${{ inputs.secret }}
       MACHINE_TYPE: ${{ inputs.machine_type }}
       BOOT_DISK_SIZE: ${{ inputs.boot_disk_size }}
       WEB_TERMINAL: ${{ inputs.web_terminal }}
+      # User secrets in dotenv form (e.g. OPENROUTER_API_KEY, GH_TOKEN). The
+      # secrets action reads WORKSTATION_ENV_<SECRET>; map each supported
+      # secret to its GitHub secret here.
+      WORKSTATION_ENV_OPENCODE: ${{ secrets.WORKSTATION_ENV_OPENCODE }}
     steps:
       - uses: actions/checkout@v4
       - name: Check cloud configuration
@@ -61,7 +70,9 @@ jobs:
       - name: Manage workstation
         shell: bash
         run: |
-          args=("$ACTION" "$NAME" --project "$PROJECT" --zone "$ZONE")
+          args=("$ACTION" "$NAME")
+          if [[ "$ACTION" == secrets ]]; then args+=("$SECRET"); fi
+          args+=(--project "$PROJECT" --zone "$ZONE")
           if [[ "$ACTION" == create ]]; then
             args+=(--machine-type "$MACHINE_TYPE" --boot-disk-size "$BOOT_DISK_SIZE")
             [[ "$WEB_TERMINAL" != true ]] || args+=(--web-terminal)

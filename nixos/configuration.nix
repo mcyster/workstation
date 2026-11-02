@@ -4,6 +4,7 @@
   imports = [
     ./base.nix
     ./gce.nix
+    ./extensions/secrets.nix
     ./extensions/caddy.nix
     ./extensions/coder.nix
     ./extensions/opencode.nix

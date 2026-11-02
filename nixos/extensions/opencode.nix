@@ -53,9 +53,13 @@ in
     # OpenCode always authenticates the user as `opencode` (the
     # OPENCODE_SERVER_USERNAME value is ignored by `serve`).
     systemd.tmpfiles.rules = [
-      "d /var/lib/workstation 0750 root root -"
       "f ${cfg.environmentFile} 0600 root root - OPENCODE_SERVER_USERNAME=opencode\nOPENCODE_SERVER_PASSWORD=0trl0sXVVSLxHTkFwYkM"
     ];
+
+    # The opencode secret (OPENROUTER_API_KEY, GH_TOKEN, ...) is a generic
+    # workstation secret named "opencode"; see nixos/extensions/secrets.nix
+    # for the env file that systemd sources here.
+    services.workstation.secrets.opencode.units = [ "opencode" ];
 
     systemd.services.opencode = {
       description = "OpenCode web service";
@@ -67,7 +71,10 @@ in
       serviceConfig = {
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
-        EnvironmentFile = cfg.environmentFile;
+        # The browser-auth file must come LAST: systemd lets later files win,
+        # so `OPENCODE_SERVER_PASSWORD` from the opencode secret would
+        # otherwise override the managed password.
+        EnvironmentFile = [ "/var/lib/workstation/secrets/.env.opencode" cfg.environmentFile ];
         ExecStart = "${lib.getExe cfg.package} serve --hostname ${cfg.host} --port ${toString cfg.port}";
         Restart = "on-failure";
         RestartSec = "3s";

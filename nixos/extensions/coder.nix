@@ -38,6 +38,10 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # The coder secret (provider API keys, OAuth tokens, ...) is a generic
+    # workstation secret named "coder"; see nixos/extensions/secrets.nix.
+    services.workstation.secrets.coder.units = [ "workstation-coder" ];
+
     systemd.services.workstation-coder = {
       description = "Coder — VS Code in the browser (code-server)";
       wantedBy = [ "multi-user.target" ];
@@ -48,6 +52,7 @@ in
       serviceConfig = {
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
+        EnvironmentFile = [ "/var/lib/workstation/secrets/.env.coder" ];
         ExecStart = "${lib.getExe cfg.package} --bind-addr ${cfg.host}:${toString cfg.port} --auth none --disable-telemetry ${cfg.workspace}";
         Restart = "on-failure";
         RestartSec = "3s";
