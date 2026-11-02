@@ -1,8 +1,18 @@
 name: Flake check
 on:
   pull_request:
+    paths:
+      - '.github/workflows/flake-check.yml'
+      - 'flake.lock'
+      - 'flake.nix'
+      - 'nixos/**'
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/flake-check.yml'
+      - 'flake.lock'
+      - 'flake.nix'
+      - 'nixos/**'
 permissions:
   contents: read
 jobs:
@@ -12,6 +22,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: determinatesystems/nix-installer-action@v23
       - name: Evaluate and build checks
-        # `nix flake check` evaluates all outputs and builds the checks:
-        # the complete workstation system closure and the GCE base image.
+        # `nix flake check` evaluates all outputs and builds the declared
+        # checks (the complete workstation closure). Only runs when the flake
+        # or its configuration actually changes; other PRs skip the ~15-minute
+        # build.
         run: nix flake check
