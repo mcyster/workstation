@@ -215,11 +215,12 @@ embedded quotes are rejected. Comments and blank lines are kept. Anything
 rejected aborts with an error naming the line — never echoing the value — and
 the existing files are left untouched.
 
-Only the services that explicitly declare the secret are restarted after a
-write: `nixos/extensions/secrets.nix` maps each name to its units, and a secret
-with an empty mapping (for example a CLI-only tool like `tog`) is written
-without restarting anything. Re-run a secret on a freshly created workstation
-to restore it.
+After a write, every unit whose `EnvironmentFile` references
+`/var/lib/workstation/secrets/.env.NAME` is restarted; the script discovers
+those units from systemd at runtime (no registry or manifest — the unit
+declaration itself is the source of truth). A secret that no unit references
+(for example a CLI-only tool like `tog`) is written without restarting
+anything. Re-run a secret on a freshly created workstation to restore it.
 
 No empty placeholder env files are generated: services load `.env.NAME` only
 when it exists (their `EnvironmentFile` entries use a `-` prefix, which systemd

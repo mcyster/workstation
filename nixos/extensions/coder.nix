@@ -38,10 +38,9 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # The coder secret (provider API keys, OAuth tokens, ...) is a generic
-    # workstation secret named "coder"; see nixos/extensions/secrets.nix.
-    services.workstation.secrets.coder.units = [ "workstation-coder" ];
-
+    # The coder secret is loaded from /var/lib/workstation/secrets/.env.coder,
+    # written by the `secrets` action. The `-` prefix means the file is loaded
+    # only when it exists.
     systemd.services.workstation-coder = {
       description = "Coder — VS Code in the browser (code-server)";
       wantedBy = [ "multi-user.target" ];

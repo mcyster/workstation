@@ -56,11 +56,10 @@ in
       "f ${cfg.environmentFile} 0600 root root - OPENCODE_SERVER_USERNAME=opencode\nOPENCODE_SERVER_PASSWORD=0trl0sXVVSLxHTkFwYkM"
     ];
 
-    # The opencode secret (OPENROUTER_API_KEY, GH_TOKEN, ...) is a generic
-    # workstation secret named "opencode"; see nixos/extensions/secrets.nix
-    # for the env file that systemd sources here.
-    services.workstation.secrets.opencode.units = [ "opencode" ];
-
+    # The opencode secret (OPENROUTER_API_KEY, GH_TOKEN, ...) is loaded from
+    # /var/lib/workstation/secrets/.env.opencode, which the `secrets` action
+    # writes and restarts consumers of. The `-` prefix means the file is
+    # loaded only when it exists.
     systemd.services.opencode = {
       description = "OpenCode web service";
       wantedBy = [ "multi-user.target" ];
