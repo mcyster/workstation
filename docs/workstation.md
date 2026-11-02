@@ -190,6 +190,10 @@ OPENROUTER_API_KEY=sk-…
 GH_TOKEN=ghp_…
 ```
 
+An `export ` prefix is also accepted and stripped: both `KEY=VALUE` and
+`export KEY=VALUE` work. The secrets action keeps only valid `KEY=VALUE`
+entries; comments and blank lines are ignored.
+
 Then run the **`secrets`** action (or `WORKSTATION_ENV_OPENCODE=… scripts/workstation secrets main`).
 It writes `/var/lib/workstation/opencode-secrets.env` on the instance and
 restarts the opencode service, so the web server sees the keys. The values stay

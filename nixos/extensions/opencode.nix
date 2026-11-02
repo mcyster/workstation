@@ -24,15 +24,10 @@ in
       '';
     };
 
-    secretsFile = lib.mkOption {
-      type = lib.types.path;
-      default = "/var/lib/workstation/opencode-secrets.env";
-      description = ''
-        Environment file holding the OpenCode user secrets (for example
-        `OPENROUTER_API_KEY` and `GH_TOKEN`), sourced into the server process.
-        Lives outside the Nix store and is rewritten by the `secrets` action.
-      '';
-    };
+    # The provider env file path is intentionally NOT an option: the only
+    # writer is the `secrets` action (infra/workstation/opencode-secrets),
+    # which fixes the path below and over SSH cannot discover Nix config. An
+    # option here would only let the two drift apart.
 
     user = lib.mkOption {
       type = lib.types.str;
@@ -65,7 +60,8 @@ in
     systemd.tmpfiles.rules = [
       "d /var/lib/workstation 0750 root root -"
       "f ${cfg.environmentFile} 0600 root root - OPENCODE_SERVER_USERNAME=opencode\nOPENCODE_SERVER_PASSWORD=0trl0sXVVSLxHTkFwYkM"
-      "f ${cfg.secretsFile} 0600 root root -"
+      # Written by the `secrets` action (infra/workstation/opencode-secrets).
+      "f /var/lib/workstation/opencode-secrets.env 0600 root root -"
     ];
 
     systemd.services.opencode = {
@@ -78,7 +74,10 @@ in
       serviceConfig = {
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
-        EnvironmentFile = [ cfg.environmentFile cfg.secretsFile ];
+        # The browser-auth file must come LAST: systemd lets later files win,
+        # so `OPENCODE_SERVER_PASSWORD` from the providers file would otherwise
+        # override the managed password.
+        EnvironmentFile = [ "/var/lib/workstation/opencode-secrets.env" cfg.environmentFile ];
         ExecStart = "${lib.getExe cfg.package} serve --hostname ${cfg.host} --port ${toString cfg.port}";
         Restart = "on-failure";
         RestartSec = "3s";
