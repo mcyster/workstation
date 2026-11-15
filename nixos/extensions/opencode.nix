@@ -67,6 +67,12 @@ in
 
       environment.HOME = "/home/${cfg.user}";
 
+      # The agent runs shell commands in this service's environment. A systemd
+      # unit's default PATH only has coreutils, findutils, grep, sed, and
+      # systemd, so expose the system profile to match a login shell and make
+      # tools such as git available.
+      path = [ config.system.path ];
+
       serviceConfig = {
         User = cfg.user;
         WorkingDirectory = "/home/${cfg.user}";
